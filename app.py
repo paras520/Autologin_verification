@@ -1,3 +1,4 @@
+from datetime import datetime
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException
@@ -36,6 +37,7 @@ def check_url(payload: CheckRequest):
         )
 
     health_result = check_url_health(url)
+    page_result = health_result.get("page_result")
     #url health file calls the visual extraction module from page extraction file so rest everything happens there
 
 

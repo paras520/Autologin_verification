@@ -3,13 +3,14 @@ import socket
 from urllib.parse import urlparse
 import time
 
-from page_extraction import extract_visible_layer, MAX_LOAD_TIME
+from src.page_extraction import extract_visible_layer, MAX_LOAD_TIME
 
 
 TIMEOUT = 20  # seconds
 MAX_REDIRECTS = 5
 
-def detect_soft_errors(visible_text):
+
+def detect_soft_errors(content):
     error_indicators = [
         "404",
         "page not found",
@@ -23,7 +24,16 @@ def detect_soft_errors(visible_text):
         "access denied"
     ]
 
-    visible_text_lower = visible_text.lower()
+    if isinstance(content, list):
+        normalized_content = " ".join(
+            str(item) for item in content if item is not None
+        )
+    elif content is None:
+        normalized_content = ""
+    else:
+        normalized_content = str(content)
+
+    visible_text_lower = normalized_content.lower()
 
     found_errors = [
         phrase for phrase in error_indicators
@@ -123,8 +133,10 @@ def check_url_health(url):
     # page matching logic
     page_result = extract_visible_layer(url, MAX_LOAD_TIME)
 
-    soft_errors = detect_soft_errors(page_result"headings")
-    
+    soft_errors = detect_soft_errors(page_result["headings"])
+
+    result["soft_errors"] = soft_errors
+    result["page_result"] = page_result
 
 
     return result
