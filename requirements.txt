@@ -4,3 +4,5 @@ requests
 playwright
 pytest
 httpx
+python-dotenv
+litellm

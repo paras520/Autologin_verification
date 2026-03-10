@@ -1,13 +1,28 @@
 import requests
 import socket
-from urllib.parse import urlparse
+import json
 import time
+from urllib.parse import urlparse
 
 from src.page_extraction import extract_visible_layer, MAX_LOAD_TIME
 
 
 TIMEOUT = 20  # seconds
 MAX_REDIRECTS = 5
+DEBUG_LOG_PATH = "debug-a55a2e.log"
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict):
+    with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as debug_file:
+        debug_file.write(json.dumps({
+            "sessionId": "a55a2e",
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }, ensure_ascii=False) + "\n")
 
 
 def detect_soft_errors(content):
@@ -43,7 +58,8 @@ def detect_soft_errors(content):
     return found_errors
 
 
-def check_url_health(url):
+async def check_url_health(url):
+    run_id = f"url-health-{int(time.time() * 1000)}"
 
     result = {
         "original_url": url,
@@ -85,6 +101,15 @@ def check_url_health(url):
 
         result["final_url"] = response.url
         result["status"] = response.status_code
+        # region agent log
+        _debug_log(run_id, "H5", "src/url_health.py:97", "http_response_received", {
+            "url": url,
+            "status_code": response.status_code,
+            "final_url": response.url,
+            "content_type": response.headers.get("Content-Type"),
+            "response_preview": response.text[:300],
+        })
+        # endregion
 
         # Step 3 — Status Code Validation
         status = response.status_code
@@ -131,7 +156,16 @@ def check_url_health(url):
         result["load_time_ms"] = int((time.time() - start_time) * 1000)
 
     # page matching logic
-    page_result = extract_visible_layer(url, MAX_LOAD_TIME)
+    page_result = await extract_visible_layer(url, MAX_LOAD_TIME)
+    # region agent log
+    _debug_log(run_id, "H6", "src/url_health.py:152", "page_result_summary", {
+        "load_error": page_result.get("load_error"),
+        "title": page_result.get("title"),
+        "final_url": page_result.get("final_url"),
+        "visible_text_length": page_result.get("visible_text_length"),
+        "visible_text_preview": (page_result.get("visible_text") or "")[:300],
+    })
+    # endregion
 
     soft_errors = detect_soft_errors(page_result["headings"])
 
