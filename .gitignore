@@ -1,0 +1,23 @@
+# Virtual environment
+venv/
+
+# Environment variables
+.env
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Test caches
+.pytest_cache/
+
+# Playwright browser binaries
+playwright/.local-browsers/
+
+# Editor
+.cursor/
+
+# OS
+Thumbs.db
+desktop.ini
