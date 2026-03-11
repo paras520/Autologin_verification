@@ -211,7 +211,8 @@ async def run_parallel_checks(
     visible_text: str,
     page_result: dict[str, Any],
 ) -> tuple[LLMDecision, dict | None, dict | None]:
-    is_direct = payload.login_type.strip().lower() == "direct"
+    login_type = payload.login_type.strip().lower()
+    needs_login_check = login_type in ("direct", "navigation")
     has_provider_or_service = bool(payload.provider or payload.service_name)
 
     llm_coro = run_main_analysis(url, soft_errors, visible_text, page_result)
@@ -221,7 +222,7 @@ async def run_parallel_checks(
             service_name=payload.service_name,
             page_result=page_result,
         )
-        if is_direct
+        if needs_login_check
         else asyncio.sleep(0)
     )
     provider_coro = (
@@ -242,6 +243,6 @@ async def run_parallel_checks(
 
     return (
         llm_decision,
-        direct_result if is_direct else None,
+        direct_result if needs_login_check else None,
         provider_result if has_provider_or_service else None,
     )

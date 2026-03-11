@@ -1,7 +1,8 @@
 import logging
+import re
 import socket
 import time
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import requests
 
@@ -11,6 +12,95 @@ logger = logging.getLogger("autologin.url_health")
 
 TIMEOUT = 20  # seconds
 MAX_REDIRECTS = 5
+
+_TOKEN_PARAM_NAMES = re.compile(
+    r"^(token|auth|session|sess|sid|key|apikey|api_key|access_token|"
+    r"refresh_token|id_token|csrf|xsrf|nonce|otp|ticket|code|sso|"
+    r"jsessionid|phpsessid|asp\.net_sessionid|__start_tran_flag__|"
+    r"saml|assertion|bearer|signature|sig|hmac|hash|digest)$",
+    re.IGNORECASE,
+)
+
+_JWT_PATTERN = re.compile(
+    r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+)
+
+_LONG_HEX = re.compile(r"[0-9a-fA-F]{32,}")
+
+_LONG_BASE64 = re.compile(r"[A-Za-z0-9+/=_-]{40,}")
+
+_UUID = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+_SAFE_PARAM_NAMES = {
+    "url", "redirect", "redirect_uri", "return", "returnurl",
+    "next", "callback", "continue", "goto", "destination", "ref",
+    "lang", "language", "locale", "hl", "page", "id", "type",
+    "action", "event", "mode", "view", "tab", "format",
+    "bank_id", "language_id",
+}
+
+
+def detect_url_token(url: str) -> dict | None:
+    """Check if the URL contains an embedded token that may expire.
+
+    Returns a dict with token details if found, or None if clean.
+    """
+    parsed = urlparse(url)
+    reasons: list[str] = []
+
+    full_url = url
+
+    if _JWT_PATTERN.search(full_url):
+        reasons.append("URL contains a JWT token")
+
+    query_params = parse_qs(parsed.query, keep_blank_values=True)
+    for param_name, values in query_params.items():
+        if param_name.lower() in _SAFE_PARAM_NAMES:
+            continue
+
+        if _TOKEN_PARAM_NAMES.match(param_name):
+            reasons.append(f"query parameter '{param_name}' is a known token/session key")
+            continue
+
+        for val in values:
+            if not val:
+                continue
+            if _UUID.fullmatch(val):
+                reasons.append(
+                    f"query parameter '{param_name}' contains a UUID ({val[:36]})"
+                )
+            elif _JWT_PATTERN.search(val):
+                reasons.append(
+                    f"query parameter '{param_name}' contains a JWT"
+                )
+            elif _LONG_HEX.fullmatch(val):
+                reasons.append(
+                    f"query parameter '{param_name}' contains a long hex string (len={len(val)})"
+                )
+            elif len(val) >= 40 and _LONG_BASE64.fullmatch(val):
+                reasons.append(
+                    f"query parameter '{param_name}' contains a long opaque token (len={len(val)})"
+                )
+
+    path_segments = [s for s in parsed.path.split("/") if s]
+    for segment in path_segments:
+        if _JWT_PATTERN.search(segment):
+            reasons.append(f"path segment contains a JWT")
+        elif _UUID.fullmatch(segment):
+            reasons.append(f"path segment contains a UUID ({segment[:36]})")
+        elif _LONG_HEX.fullmatch(segment):
+            reasons.append(f"path segment contains a long hex token (len={len(segment)})")
+
+    if not reasons:
+        return None
+
+    return {
+        "has_token": True,
+        "reasons": reasons,
+        "summary": "; ".join(reasons),
+    }
 
 
 def detect_soft_errors(content):
@@ -56,7 +146,15 @@ async def check_url_health(url):
         "reason": None,
         "redirect_chain": [],
         "load_time_ms": None,
+        "token_detected": None,
     }
+
+    token_info = detect_url_token(url)
+    if token_info:
+        result["token_detected"] = token_info
+        logger.warning(
+            "Embedded token detected in URL: %s", token_info["summary"],
+        )
 
     start_time = time.time()
 

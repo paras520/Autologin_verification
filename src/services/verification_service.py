@@ -44,16 +44,20 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     visible_text = health_result["page_result"]["visible_text"]
     page_result = health_result["page_result"]
     health_check = health_result.get("health") in {"OK", "REDIRECT"}
+    token_detected = health_result.get("token_detected")
 
     logger.info(
-        "Health check result: health=%s  status=%s  load_time=%sms",
+        "Health check result: health=%s  status=%s  load_time=%sms  token_detected=%s",
         health_result.get("health"),
         health_result.get("status"),
         health_result.get("load_time_ms"),
+        bool(token_detected),
     )
 
+    login_type = payload.login_type.strip().lower()
+
     tasks_launched = ["main-llm"]
-    if payload.login_type.strip().lower() == "direct":
+    if login_type in ("direct", "navigation"):
         tasks_launched.append("direct-login-check")
     if payload.provider or payload.service_name:
         tasks_launched.append("provider-service-match")
@@ -68,15 +72,24 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     )
     logger.info("All parallel LLM tasks completed")
 
-    direct_check_failed = bool(direct_login_check) and not direct_login_check[
-        "is_login_page"
-    ]
+    if login_type == "direct":
+        direct_check_failed = (
+            bool(direct_login_check) and not direct_login_check["is_login_page"]
+        )
+    elif login_type == "navigation":
+        direct_check_failed = (
+            bool(direct_login_check) and direct_login_check["is_login_page"]
+        )
+    else:
+        direct_check_failed = False
 
     if direct_login_check:
         logger.info(
-            "Direct login check: is_login_page=%s  score=%s  reason=%s",
+            "Login-type check (%s): is_login_page=%s  score=%s  failed=%s  reason=%s",
+            login_type,
             direct_login_check["is_login_page"],
             direct_login_check["score"],
+            direct_check_failed,
             direct_login_check["reason"],
         )
 
@@ -124,6 +137,8 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     country_uncertain = bool(country_check) and country_check["matched"] is None
 
     notes = []
+    if token_detected:
+        notes.append(f"token_in_url: {token_detected['summary']}")
     if soft_errors:
         notes.append(f"soft_errors={', '.join(soft_errors)}")
     if llm_decision.session_id:
@@ -144,9 +159,21 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         or direct_check_failed
         or provider_match_failed
         or country_mismatch
+        or bool(token_detected)
     )
 
-    if direct_check_failed:
+    if token_detected:
+        final_reason = (
+            f"URL contains an embedded token that may expire — "
+            f"{token_detected['summary']}"
+        )
+    elif direct_check_failed and login_type == "navigation":
+        final_reason = (
+            f"Navigation URL is a direct login portal — "
+            f"expected an indirect/navigation page. "
+            f"{direct_login_check['reason']}"
+        )
+    elif direct_check_failed:
         final_reason = direct_login_check["reason"]
     elif provider_match_failed:
         final_reason = provider_service_match["reason"]
@@ -168,6 +195,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         or provider_match_failed
         or country_mismatch
         or country_uncertain
+        or bool(token_detected)
     )
 
     elapsed_ms = int((datetime.now() - request_start).total_seconds() * 1000)
@@ -193,7 +221,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         page_match_score=page_match_score,
         direct_match_score=direct_match_score,
         notes=" | ".join(notes) or None,
-        updated_name="Will be implemented later",
+        updated_name=None,
         marked_for_human_review=needs_human_review,
         marked_for_deletion=final_inactive_flagged,
         errors=llm_decision.error or "",

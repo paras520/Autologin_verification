@@ -289,7 +289,7 @@ async def call_litellm(
     tags = [base_tag]
     if tag_suffix:
         tags.append(f"{base_tag}_{tag_suffix}")
-    
+
     # CRITICAL: Use extra_body to pass metadata to LiteLLM for Langfuse callback
     params["extra_body"] = {
         "metadata": {
