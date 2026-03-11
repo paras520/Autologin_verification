@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -12,9 +14,26 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from src.heuristics import assess_direct_login_page, assess_provider_service_match
 from src.url_health import check_url_health
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
+
+# ---------------------------------------------------------------------------
+# Logging setup — console + rotating file
+# ---------------------------------------------------------------------------
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("autologin.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger("autologin.app")
 
 app = FastAPI(title="URL Verification API")
 DEFAULT_LANGFUSE_PROMPT_PATH = "autologin/login-portal-classifier"
@@ -22,6 +41,9 @@ LLM_VISIBLE_TEXT_LIMIT = 40000
 
 
 class CheckRequest(BaseModel):
+    provider: str
+    service_name: str
+    login_type: str 
     url: str
 
 
@@ -137,6 +159,7 @@ async def run_langfuse_analysis(
     prompt_path = _get_prompt_path()
 
     if not _langfuse_is_configured():
+        logger.warning("Langfuse not configured — skipping main LLM analysis")
         return LLMDecision(
             inactive_flagged=False,
             reason=None,
@@ -149,6 +172,8 @@ async def run_langfuse_analysis(
     _normalize_proxy_env()
     session_id = f"url-check-{uuid4()}"
     variables, llm_visible_text = _build_llm_variables(url, soft_errors, visible_text, page_result)
+
+    logger.info("[LLM-main] Calling Langfuse prompt=%s  session=%s  url=%s", prompt_path, session_id, url)
 
     try:
         build_messages, call_litellm, get_prompts_from_langfuse, parse_response = _load_langfuse_helpers()
@@ -163,6 +188,8 @@ async def run_langfuse_analysis(
             user_prompt=user_prompt,
         )
 
+        logger.debug("[LLM-main] Sending %d messages to model=%s", len(messages), config.get("model"))
+
         response = await call_litellm(
             config=config,
             messages=messages,
@@ -172,6 +199,8 @@ async def run_langfuse_analysis(
         )
 
         parsed_output = parse_response(response, has_functions=False, has_tools=False)
+        logger.info("[LLM-main] Raw response: %s", str(parsed_output)[:500])
+
         decision_value = None
         decision_reason = None
 
@@ -180,6 +209,7 @@ async def run_langfuse_analysis(
             decision_reason = parsed_output.get("reason")
 
         if decision_value is None:
+            logger.warning("[LLM-main] Could not extract inactive_flagged from response")
             return LLMDecision(
                 inactive_flagged=False,
                 reason=None,
@@ -188,6 +218,8 @@ async def run_langfuse_analysis(
                 session_id=session_id,
                 prompt_path=prompt_path,
             )
+
+        logger.info("[LLM-main] Decision: inactive_flagged=%s  reason=%s", decision_value, decision_reason)
 
         return LLMDecision(
             inactive_flagged=decision_value,
@@ -198,6 +230,7 @@ async def run_langfuse_analysis(
             prompt_path=prompt_path,
         )
     except Exception as exc:
+        logger.error("[LLM-main] LLM call failed: %s", exc, exc_info=True)
         return LLMDecision(
             inactive_flagged=False,
             reason=None,
@@ -214,27 +247,104 @@ async def run_langfuse_analysis(
 @app.post("/check", response_model=ReturnResponse)
 async def check_url(payload: CheckRequest) -> ReturnResponse:
     url = payload.url.strip()
+    request_start = datetime.now()
+
+    logger.info(
+        ">>> /check request  url=%s  provider=%s  service=%s  login_type=%s",
+        url, payload.provider, payload.service_name, payload.login_type,
+    )
 
     if not url:
+        logger.warning("Rejected: empty URL")
         raise HTTPException(
             status_code=400,
             detail="Request body must include a non-empty 'url' field.",
         )
 
     if not _is_valid_url(url):
+        logger.warning("Rejected: invalid URL scheme/host — %s", url)
         raise HTTPException(
             status_code=400,
             detail="URL must include a valid scheme and host.",
         )
 
     health_result = await check_url_health(url)
-    
+
     soft_errors = health_result["soft_errors"]
     visible_text = health_result["page_result"]["visible_text"]
-    print(visible_text)
     page_result = health_result["page_result"]
-    llm_decision = await run_langfuse_analysis(url, soft_errors, visible_text, page_result)
     health_check = health_result.get("health") in {"OK", "REDIRECT"}
+
+    logger.info(
+        "Health check result: health=%s  status=%s  load_time=%sms",
+        health_result.get("health"),
+        health_result.get("status"),
+        health_result.get("load_time_ms"),
+    )
+
+    is_direct = payload.login_type.strip().lower() == "direct"
+    has_provider_or_service = bool(payload.provider or payload.service_name)
+
+    tasks_launched = ["main-llm"]
+    if is_direct:
+        tasks_launched.append("direct-login-check")
+    if has_provider_or_service:
+        tasks_launched.append("provider-service-match")
+    logger.info("Launching parallel LLM tasks: %s", ", ".join(tasks_launched))
+
+    llm_coro = run_langfuse_analysis(url, soft_errors, visible_text, page_result)
+
+    direct_coro = (
+        assess_direct_login_page(
+            provider=payload.provider,
+            service_name=payload.service_name,
+            page_result=page_result,
+        )
+        if is_direct
+        else asyncio.sleep(0)
+    )
+
+    provider_coro = (
+        assess_provider_service_match(
+            provider=payload.provider,
+            service_name=payload.service_name,
+            page_result=page_result,
+        )
+        if has_provider_or_service
+        else asyncio.sleep(0)
+    )
+
+    llm_decision, direct_result, provider_result = await asyncio.gather(
+        llm_coro, direct_coro, provider_coro
+    )
+
+    logger.info("All parallel LLM tasks completed")
+
+    direct_login_check = direct_result if is_direct else None
+    direct_check_failed = bool(direct_login_check) and not direct_login_check["is_login_page"]
+
+    if direct_login_check:
+        logger.info(
+            "Direct login check: is_login_page=%s  score=%s  reason=%s",
+            direct_login_check["is_login_page"],
+            direct_login_check["score"],
+            direct_login_check["reason"],
+        )
+
+    prior_checks_passed = health_check and not direct_check_failed
+    provider_service_match = (
+        provider_result if has_provider_or_service and prior_checks_passed else None
+    )
+
+    if provider_service_match:
+        logger.info(
+            "Provider/service match: matched=%s  score=%s  reason=%s",
+            provider_service_match["matched"],
+            provider_service_match["score"],
+            provider_service_match["reason"],
+        )
+    elif has_provider_or_service and not prior_checks_passed:
+        logger.info("Provider/service match result discarded — prior checks failed")
 
     notes = []
     if soft_errors:
@@ -245,18 +355,57 @@ async def check_url(payload: CheckRequest) -> ReturnResponse:
         notes.append(f"prompt_path={llm_decision.prompt_path}")
     if llm_decision.error:
         notes.append(f"llm_error={llm_decision.error}")
+    if direct_login_check:
+        notes.extend(direct_login_check["notes"])
+    if provider_service_match:
+        notes.extend(provider_service_match["notes"])
+
+    provider_match_failed = (
+        bool(provider_service_match) and not provider_service_match["matched"]
+    )
+
+    final_inactive_flagged = (
+        llm_decision.inactive_flagged
+        or direct_check_failed
+        or provider_match_failed
+    )
+
+    if direct_check_failed:
+        final_reason = direct_login_check["reason"]
+    elif provider_match_failed:
+        final_reason = provider_service_match["reason"]
+    else:
+        final_reason = llm_decision.reason or health_result.get("reason")
+
+    if provider_service_match:
+        matching_score = provider_service_match["score"]
+    elif direct_login_check:
+        matching_score = direct_login_check["score"]
+    else:
+        matching_score = None
+
+    elapsed_ms = int((datetime.now() - request_start).total_seconds() * 1000)
+
+    logger.info(
+        "<<< /check response  url=%s  inactive_flagged=%s  reason=%s  "
+        "health_check=%s  matching_score=%s  elapsed=%dms",
+        url, final_inactive_flagged, final_reason,
+        health_check, matching_score, elapsed_ms,
+    )
 
     #DO NOT TOUCH THIS STRUCTURE, IT IS USED FOR THE RETURN RESPONSE
     return ReturnResponse(
         url=url,
-        inactive_flagged=llm_decision.inactive_flagged,
-        reason=llm_decision.reason or health_result.get("reason"),
+        inactive_flagged=final_inactive_flagged,
+        reason=final_reason,
         health_check=health_check,
-        page_matching_score=None,
+        page_matching_score=matching_score,
         notes=" | ".join(notes) or None,
         updated_name=page_result.get("title"),
-        marked_for_human_review=bool(llm_decision.error),
-        marked_for_deletion=llm_decision.inactive_flagged,
+        marked_for_human_review=(
+            bool(llm_decision.error) or direct_check_failed or provider_match_failed
+        ),
+        marked_for_deletion=final_inactive_flagged,
         errors=llm_decision.error or "",
         time=datetime.now().isoformat(),
     )
