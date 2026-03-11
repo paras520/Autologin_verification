@@ -1,12 +1,14 @@
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
-
-from src.routers.verification_router import router as verification_router
-from src.utils.logging_utils import configure_logging
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from fastapi import FastAPI  # noqa: E402
+
+from src.routers.verification_router import router as verification_router  # noqa: E402
+from src.utils.logging_utils import configure_logging  # noqa: E402
+
 configure_logging()
 
 app = FastAPI(title="URL Verification API")

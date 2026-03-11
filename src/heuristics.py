@@ -148,6 +148,7 @@ async def assess_direct_login_page(
             messages=messages,
             session_id=session_id,
             api_endpoint="/check/direct-login",
+            tag_suffix="2",
             prompt=prompt_obj,
         )
 
@@ -266,6 +267,7 @@ async def assess_provider_service_match(
             messages=messages,
             session_id=session_id,
             api_endpoint="/check/provider-match",
+            tag_suffix="3",
             prompt=prompt_obj,
         )
 

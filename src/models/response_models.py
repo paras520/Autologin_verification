@@ -7,7 +7,8 @@ class ReturnResponse(BaseModel):
     inactive_flagged: bool
     reason: str | None
     health_check: bool
-    page_matching_score: int | None
+    page_match_score: int | None
+    direct_match_score: int | None
     notes: str | None
     updated_name: str | None
     marked_for_human_review: bool

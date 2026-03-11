@@ -143,6 +143,7 @@ async def run_main_analysis(
             messages=messages,
             session_id=session_id,
             api_endpoint="/check",
+            tag_suffix="1",
             prompt=prompt_obj,
         )
 

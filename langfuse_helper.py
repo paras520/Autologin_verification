@@ -246,6 +246,7 @@ async def call_litellm(
     messages: list,
     session_id: str,
     api_endpoint: str = None,
+    tag_suffix: str | None = None,
     functions: list = None,
     tools: list = None,
     prompt: str = None
@@ -260,6 +261,7 @@ async def call_litellm(
         messages: Messages array
         session_id: Session ID for tracking
         api_endpoint: API endpoint for metadata
+        tag_suffix: Optional numbered sub-tag for tracing
         functions: Optional function schemas (OpenAI format)
         tools: Optional tool schemas (OpenAI format)
         prompt: Optional prompt for metadata
@@ -283,15 +285,17 @@ async def call_litellm(
     }
     
     # Add metadata for Langfuse tracing (via extra_body)
-    tags = ["m75_source_verify", "Smart_Upload"]
-    if api_endpoint:
-        tags.append(api_endpoint)
+    base_tag = "autologin_verification"
+    tags = [base_tag]
+    if tag_suffix:
+        tags.append(f"{base_tag}_{tag_suffix}")
     
     # CRITICAL: Use extra_body to pass metadata to LiteLLM for Langfuse callback
     params["extra_body"] = {
         "metadata": {
             "session_id": session_id or "",
             "tags": tags,
+            "api_endpoint": api_endpoint or "",
             "prompt": prompt  # Pass the entire prompt object directly
         }
     }
@@ -371,6 +375,7 @@ async def get_and_call_litellm(
     prompt_path: str,
     session_id: str,
     api_endpoint: str = None,
+    tag_suffix: str | None = None,
     variables: dict = None,
     pdf_file: bytes = None,
     images: list = None,
@@ -387,6 +392,7 @@ async def get_and_call_litellm(
         prompt_path: Langfuse prompt path
         session_id: Session ID
         api_endpoint: API endpoint for tracking
+        tag_suffix: Optional numbered sub-tag for tracing
         variables: Prompt variables
         pdf_file: Optional PDF bytes
         images: Optional image bytes list
@@ -427,6 +433,7 @@ async def get_and_call_litellm(
         messages=messages,
         session_id=session_id,
         api_endpoint=api_endpoint,
+        tag_suffix=tag_suffix,
         functions=functions,
         tools=tools,
         prompt=user_prompt

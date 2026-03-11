@@ -155,12 +155,12 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     else:
         final_reason = llm_decision.reason or health_result.get("reason")
 
-    if provider_service_match:
-        matching_score = provider_service_match["score"]
-    elif direct_login_check:
-        matching_score = direct_login_check["score"]
-    else:
-        matching_score = None
+    page_match_score = (
+        provider_service_match["score"] if provider_service_match else None
+    )
+    direct_match_score = (
+        direct_login_check["score"] if direct_login_check else None
+    )
 
     needs_human_review = (
         bool(llm_decision.error)
@@ -173,12 +173,14 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     elapsed_ms = int((datetime.now() - request_start).total_seconds() * 1000)
     logger.info(
         "<<< /check response  url=%s  inactive_flagged=%s  reason=%s  "
-        "health_check=%s  matching_score=%s  country_matched=%s  elapsed=%dms",
+        "health_check=%s  page_match_score=%s  direct_match_score=%s  "
+        "country_matched=%s  elapsed=%dms",
         url,
         final_inactive_flagged,
         final_reason,
         health_check,
-        matching_score,
+        page_match_score,
+        direct_match_score,
         country_check["matched"] if country_check else "n/a",
         elapsed_ms,
     )
@@ -188,7 +190,8 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         inactive_flagged=final_inactive_flagged,
         reason=final_reason,
         health_check=health_check,
-        page_matching_score=matching_score,
+        page_match_score=page_match_score,
+        direct_match_score=direct_match_score,
         notes=" | ".join(notes) or None,
         updated_name="Will be implemented later",
         marked_for_human_review=needs_human_review,
