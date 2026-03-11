@@ -6,3 +6,4 @@ pytest
 httpx
 python-dotenv
 litellm
+tldextract
