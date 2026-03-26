@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from src.models.request_models import CheckRequest
 from src.models.response_models import ReturnResponse
 from src.services.analysis_service import run_parallel_checks
-from src.utils.heuristics import assess_country_match
+from src.utils.heuristics import assess_country_match, assess_service_name
 from src.utils.url_health import check_url_health
 
 logger = logging.getLogger("autologin.verification_service")
@@ -41,7 +41,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     health_result = await check_url_health(url)
 
     soft_errors = health_result["soft_errors"]
-    visible_text = health_result["page_result"]["visible_text"]
+    visible_text = health_result["page_result"]["visible_text"] or ""
     page_result = health_result["page_result"]
     health_check = health_result.get("health") in {"OK", "REDIRECT"}
     token_detected = health_result.get("token_detected")
@@ -53,6 +53,38 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         health_result.get("load_time_ms"),
         bool(token_detected),
     )
+
+    if not health_check:
+        reason = health_result.get("reason") or "URL is unreachable or returned an error"
+        notes = []
+        if token_detected:
+            notes.append(f"token_in_url: {token_detected['summary']}")
+            reason = (
+                f"URL contains an embedded token that may expire — "
+                f"{token_detected['summary']}"
+            )
+        if soft_errors:
+            notes.append(f"soft_errors={', '.join(soft_errors)}")
+
+        elapsed_ms = int((datetime.now() - request_start).total_seconds() * 1000)
+        logger.info(
+            "<<< /check early exit (health failed)  url=%s  reason=%s  elapsed=%dms",
+            url, reason, elapsed_ms,
+        )
+        return ReturnResponse(
+            url=url,
+            inactive_flagged=True,
+            reason=reason,
+            health_check=False,
+            page_match_score=None,
+            direct_match_score=None,
+            notes=" | ".join(notes) or None,
+            updated_name=None,
+            marked_for_human_review=True,
+            marked_for_deletion=True,
+            errors="",
+            time=datetime.now().isoformat(),
+        )
 
     login_type = payload.login_type.strip().lower()
 
@@ -198,6 +230,20 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         or bool(token_detected)
     )
 
+    name_flag = assess_service_name(
+        service_name=payload.service_name,
+        provider=payload.provider,
+        page_result=page_result,
+    )
+    if name_flag:
+        logger.info(
+            "Service name QA: %s  service_name=%r  provider=%r",
+            name_flag,
+            payload.service_name,
+            payload.provider,
+        )
+        notes.append(f"name_qa={name_flag}")
+
     elapsed_ms = int((datetime.now() - request_start).total_seconds() * 1000)
     logger.info(
         "<<< /check response  url=%s  inactive_flagged=%s  reason=%s  "
@@ -221,7 +267,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         page_match_score=page_match_score,
         direct_match_score=direct_match_score,
         notes=" | ".join(notes) or None,
-        updated_name=None,
+        updated_name=name_flag,
         marked_for_human_review=needs_human_review,
         marked_for_deletion=final_inactive_flagged,
         errors=llm_decision.error or "",

@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 # DO NOT TOUCH THIS STRUCTURE, IT IS USED FOR THE RETURN RESPONSE
 class ReturnResponse(BaseModel):
+    # need to add session id from suyesh sir
     url: str
     inactive_flagged: bool
     reason: str | None

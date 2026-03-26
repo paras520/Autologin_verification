@@ -64,6 +64,7 @@ def _build_llm_variables(
     visible_text: str,
     page_result: dict[str, Any],
 ) -> tuple[dict[str, str], str]:
+    visible_text = visible_text or ""
     llm_visible_text = visible_text[:LLM_VISIBLE_TEXT_LIMIT]
     truncated_for_llm = len(visible_text) > LLM_VISIBLE_TEXT_LIMIT
 

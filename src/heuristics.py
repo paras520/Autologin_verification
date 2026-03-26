@@ -315,6 +315,205 @@ async def assess_provider_service_match(
 
 
 # ---------------------------------------------------------------------------
+# Service name QA check (deterministic — no LLM, read-only / pass-fail only)
+# ---------------------------------------------------------------------------
+
+# Tokens that are always noise in a display name regardless of context
+_NAME_NOISE_WORDS: set[str] = {
+    "login", "online", "portal", "banking", "bank", "internet", "secure",
+    "authenticated", "authentication", "access",
+}
+
+# Parenthetical suffixes that just duplicate audience info already conveyed
+# by the kind/audience fields — strip them before comparing
+_AUDIENCE_PARENS: set[str] = {
+    "personal", "business", "corporate", "retail", "nri", "staff",
+    "individual", "sme", "msme",
+}
+
+# Words that indicate a banking-type service (used to detect generics)
+_BANKING_TYPE_WORDS: set[str] = {
+    "net banking", "internet banking", "online banking",
+    "netbanking", "ibanking", "e-banking",
+}
+
+
+def _tokenize(text: str) -> list[str]:
+    """Split on whitespace and punctuation, lower-case."""
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _bank_abbreviations(provider: str) -> set[str]:
+    """
+    Derive the common abbreviations for a bank name so we can strip them
+    from the service name.
+
+    Rules (mirrors the prompt logic):
+      1. All-caps acronym of initial letters of each word ≥ 2 chars
+         (e.g. "Bank of India" → "BOI", "HDFC Bank" → "HB" … not useful;
+          only emit if ≥ 2 words give initials, else skip)
+      2. First word of the bank name (e.g. "Kotak" from "Kotak Mahindra Bank")
+      3. The raw words themselves (e.g. "HDFC" already appears as a token)
+    """
+    if not provider:
+        return set()
+
+    words = re.findall(r"[a-zA-Z0-9]+", provider)
+    abbrevs: set[str] = set()
+
+    for w in words:
+        abbrevs.add(w.lower())
+
+    # Acronym from first letters of words >= 2 chars
+    significant = [w for w in words if len(w) >= 2]
+    if len(significant) >= 2:
+        acronym = "".join(w[0] for w in significant).lower()
+        abbrevs.add(acronym)
+
+    # First word alone (handles "Kotak", "ICICI", "HDFC" etc.)
+    if words:
+        abbrevs.add(words[0].lower())
+
+    # Remove generic banking words from the abbrev set so we don't
+    # accidentally strip meaningful tokens like "national" from a name
+    abbrevs -= {"bank", "ltd", "limited", "inc", "co"}
+
+    return abbrevs
+
+
+def _strip_parentheticals(text: str) -> str:
+    """Remove (...) and [...] groups whose inner text is an audience word or country."""
+    def _should_strip(match: re.Match) -> str:
+        inner = match.group(1).strip().lower()
+        inner_tokens = re.findall(r"[a-z]+", inner)
+        if all(t in _AUDIENCE_PARENS for t in inner_tokens if t):
+            return ""
+        return match.group(0)
+
+    return re.sub(r"\(([^)]*)\)", _should_strip, text)
+
+
+def _normalize_service_name(service_name: str, provider: str) -> str:
+    """
+    Apply the canonical naming rules from the classification prompt and return
+    a normalised display name.  This is intentionally lightweight — it covers
+    the deterministic rules only (no LLM inference).
+
+    Steps applied (mirrors the prompt chain-of-thought):
+      1. Strip bank name tokens / abbreviations from the service name.
+      2. Strip parentheticals that only carry audience info.
+      3. Strip trailing / leading noise words.
+      4. Title-case and collapse whitespace.
+    """
+    if not service_name:
+        return ""
+
+    name = service_name.strip()
+
+    # Step 2 — remove audience-only parentheticals
+    name = _strip_parentheticals(name)
+
+    # Remove bracket variants too
+    name = re.sub(r"\[([^\]]*)\]", lambda m: (
+        "" if all(t in _AUDIENCE_PARENS for t in re.findall(r"[a-z]+", m.group(1).lower()) if t)
+        else m.group(0)
+    ), name)
+
+    # Step 1 — strip bank-name tokens
+    abbrevs = _bank_abbreviations(provider)
+    tokens = _tokenize(name)
+    cleaned_tokens = [t for t in tokens if t not in abbrevs]
+
+    # Reconstruct from cleaned tokens preserving any non-bank words
+    # (we work token-level to avoid accidentally removing substrings)
+    cleaned = " ".join(cleaned_tokens)
+
+    # Step 3 — strip pure noise words from both ends
+    words = cleaned.split()
+    while words and words[0].lower() in _NAME_NOISE_WORDS:
+        words.pop(0)
+    while words and words[-1].lower() in _NAME_NOISE_WORDS:
+        words.pop()
+
+    cleaned = " ".join(words)
+
+    # Step 4 — title case, collapse whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().title()
+
+    return cleaned
+
+
+def assess_service_name(
+    service_name: str,
+    provider: str,
+    page_result: dict,
+) -> str | None:
+    """
+    QA-only, read-only check: does *service_name* already look canonical?
+
+    Returns:
+        None            — name passes (looks correct / already canonical)
+        "NAME_MISMATCH" — name fails (stored name deviates from canonical form)
+
+    The check is purely deterministic — no LLM, no external calls.
+    It never modifies any data; callers must treat the return value as a
+    diagnostic flag only.
+
+    Mismatch is flagged when ANY of the following are true:
+      a) Bank name tokens appear verbatim in the stored service name
+         (e.g. "HDFC Net Banking" → "HDFC" is redundant)
+      b) Audience-only parentheticals appear
+         (e.g. "Net Banking (Personal)" → "(Personal)" is noise)
+      c) The normalised name differs from the stored name by more than
+         case/whitespace (i.e. meaningful tokens were stripped or reordered)
+    """
+    if not service_name:
+        return None
+
+    normalised = _normalize_service_name(service_name, provider)
+    stored_normalised = re.sub(r"\s+", " ", service_name.strip()).title()
+
+    if not normalised:
+        return None
+
+    # Check (a): bank abbreviation tokens present in stored name
+    abbrevs = _bank_abbreviations(provider)
+    stored_tokens = set(_tokenize(service_name))
+    if abbrevs and stored_tokens & abbrevs:
+        logger.debug(
+            "[name-qa] MISMATCH — bank tokens %s found in service_name=%r",
+            stored_tokens & abbrevs,
+            service_name,
+        )
+        return "NAME_MISMATCH"
+
+    # Check (b): audience-only parentheticals present
+    if re.search(r"\(([^)]*)\)", service_name):
+        inner_groups = re.findall(r"\(([^)]*)\)", service_name)
+        for group in inner_groups:
+            inner_tokens = re.findall(r"[a-z]+", group.lower())
+            if inner_tokens and all(t in _AUDIENCE_PARENS for t in inner_tokens):
+                logger.debug(
+                    "[name-qa] MISMATCH — audience parenthetical %r in service_name=%r",
+                    group,
+                    service_name,
+                )
+                return "NAME_MISMATCH"
+
+    # Check (c): meaningful token difference after normalisation
+    if normalised != stored_normalised:
+        logger.debug(
+            "[name-qa] MISMATCH — normalised=%r  stored=%r",
+            normalised,
+            stored_normalised,
+        )
+        return "NAME_MISMATCH"
+
+    logger.debug("[name-qa] PASS — service_name=%r", service_name)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Country match check (deterministic — no LLM)
 # ---------------------------------------------------------------------------
 
