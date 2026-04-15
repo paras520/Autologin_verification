@@ -118,8 +118,6 @@ async def extract_visible_layer(
         "load_error": None,
     }
 
-    logger.info("Starting page extraction for %s (timeout=%dms)", url, MAX_LOAD_TIME)
-
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page()
@@ -127,7 +125,6 @@ async def extract_visible_layer(
         try:
             try:
                 await page.goto(url, timeout=MAX_LOAD_TIME, wait_until="networkidle")
-                logger.info("Page loaded with networkidle: %s", url)
             except PlaywrightTimeoutError as timeout_error:
                 logger.warning(
                     "networkidle timed out for %s, falling back to domcontentloaded: %s",
@@ -137,10 +134,6 @@ async def extract_visible_layer(
 
             result["final_url"] = page.url
             result["title"] = await page.title()
-            logger.info(
-                "Page metadata: final_url=%s  title=%s",
-                result["final_url"], result["title"],
-            )
 
             raw_text = await _collect_all_text(page)
             cleaned_text = re.sub(r"\s+", " ", raw_text or "").strip()
@@ -152,13 +145,6 @@ async def extract_visible_layer(
             else:
                 result["visible_text"] = cleaned_text
 
-            logger.info(
-                "Visible text extracted: length=%d  truncated=%s  preview=%.200s",
-                result["visible_text_length"],
-                result["visible_text_truncated"],
-                result["visible_text"][:200] if result["visible_text"] else "",
-            )
-
             result["headings"] = await _collect_elements_across_frames(
                 page, "h1, h2, h3",
             )
@@ -167,13 +153,6 @@ async def extract_visible_layer(
             )
 
             result["login_form_present"] = await _detect_login_form(page)
-
-            logger.info(
-                "Page elements: headings=%d  buttons=%d  login_form=%s",
-                len(result["headings"]),
-                len(result["buttons"]),
-                result["login_form_present"],
-            )
 
         except Exception as e:
             result["load_error"] = str(e)

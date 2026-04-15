@@ -1,13 +1,17 @@
-"""Heuristics for URL verification checks.
 
 LLM-based checks use Langfuse + LiteLLM for intelligent analysis.
 The country-match check is fully deterministic (no LLM call).
 
-Prompt paths are configurable through environment variables so you can manage
+Prompt paths are """Heuristics for URL verification checks.
+configurable through environment variables so you can manage
 and version them in Langfuse independently.
 
 Expected env vars (on top of the shared Langfuse credentials):
-  LANGFUSE_DIRECT_LOGIN_PROMPT   — default: test/autologin_Direct_Login_Check
+  LANGFUSE_EXTRACTOR_PROMPT      — default: test/autologin_identifier_extractor
+                                   This prompt receives url + bank name + service name
+                                   + all extracted page sections in one call and returns:
+                                   bank_identifiers, relevant_page_sections,
+                                   login_signals, is_login_page, login_type_suggestion
   LANGFUSE_PROVIDER_MATCH_PROMPT — default: test/autologin_service_matcher
 """
 
@@ -18,8 +22,6 @@ import logging
 import os
 import re
 from urllib.parse import urlparse
-from uuid import uuid4
-
 try:
     import tldextract
 except ImportError:
@@ -27,11 +29,40 @@ except ImportError:
 
 logger = logging.getLogger("autologin.heuristics")
 
-DEFAULT_DIRECT_LOGIN_PROMPT = "test/autologin_Direct_Login_Check"
+DEFAULT_EXTRACTOR_PROMPT = "test/autologin_identifier_extractor"
 DEFAULT_PROVIDER_MATCH_PROMPT = "test/autologin_service_matcher"
 
-# Cap visible text sent to these LLM checks (separate from the main LLM limit)
-_HEURISTIC_VISIBLE_TEXT_LIMIT = 10_000
+# The cheap extractor LLM receives the full visible text — no cap.
+# It is responsible for extracting only the relevant sections before passing
+# a compact summary to the final smart LLM.
+_HEURISTIC_VISIBLE_TEXT_LIMIT = 10_000  # kept for _build_page_variables (legacy helper)
+
+# Known third-party / shared hosting domains that serve multiple banks.
+# Domain-token matching is unreliable for these; Step 3 must rely on page content.
+_SHARED_HOSTING_DOMAINS: frozenset[str] = frozenset({
+    "feba.in",
+    "finacleconnect.in",
+    "hdfcbank.com",          # used by HDFC for multiple products
+    "onlinesbi.com",
+    "onlinesbi.sbi",
+    "yesbank.in",
+    "axisbank.com",
+    "icicibank.com",
+    "bankofbaroda.in",
+    "unionbankofindia.org",
+    "canarabank.in",
+    "pnbindia.in",
+    "idfcfirstbank.com",
+    "kotak.com",
+    "indusind.com",
+    "federalbank.co.in",
+    "southindianbank.com",
+    "kvb.co.in",
+    "dbs.com",
+    "sc.com",
+    "hsbc.co.in",
+    "citibank.co.in",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +119,358 @@ def _parse_notes(raw) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Direct login-page check
+# Step 1+2 — Combined cheap LLM: URL confidence + identifier extraction +
+#             navigation detection — all in one call
+# ---------------------------------------------------------------------------
+
+def _root_domain(url: str) -> str:
+    """Return the registrable root domain (e.g. 'canarabank.in') from a URL."""
+    if tldextract is not None:
+        ext = tldextract.extract(url)
+        if ext.domain and ext.suffix:
+            return f"{ext.domain}.{ext.suffix}".lower()
+    parsed = urlparse(url)
+    netloc = parsed.netloc.lower().split(":")[0]
+    parts = netloc.rsplit(".", 2)
+    return ".".join(parts[-2:]) if len(parts) >= 2 else netloc
+
+
+def _is_shared_host(url: str) -> bool:
+    """Return True if the URL's root domain is a known shared/multi-bank host."""
+    return _root_domain(url) in _SHARED_HOSTING_DOMAINS
+
+
+async def extract_and_score(
+    provider: str,
+    service_name: str,
+    url: str,
+    page_result: dict,
+    session_id: str = "",
+) -> dict:
+    """Single cheap LLM call that extracts page signals.
+
+    Receives all three identity signals (url, bank name, service name) together
+    with the complete extracted page content in one call. The cheap LLM is
+    responsible for:
+
+      1. Extracting relevant page sections that identify the bank
+         (bank_identifiers — e.g. "Canara Bank", logo alt text, footer legal name)
+      2. Extracting relevant page sections that identify the service/product
+         (relevant_page_sections — all text snippets that reveal what service this
+          is: headings, product names, service descriptions, any unique identifiers)
+      3. Detecting login signals and deciding navigation type
+         (login_signals, is_login_page, login_type_suggestion)
+
+    url_confidence_score is NOT computed here — it is computed by the final
+    smart LLM (assess_match_with_identifiers) which has more compute budget.
+
+    The full visible_text is sent so the LLM can scan everything. It returns
+    only the compact relevant sections — that compact output is what gets
+    forwarded to the final smart LLM (no raw text passes through).
+
+    Returns:
+        {
+          "bank_identifiers": list[str],
+          "relevant_page_sections": list[str],
+          "login_signals": list[str],
+          "is_login_page": bool,
+          "login_type_suggestion": "direct" | "navigation",
+          "notes": list[str],
+        }
+    """
+    is_login_form = bool(page_result.get("login_form_present", False))
+    _FALLBACK = {
+        "bank_identifiers": [],
+        "relevant_page_sections": [],
+        "login_signals": [],
+        "is_login_page": is_login_form,
+        "login_type_suggestion": "direct" if is_login_form else "navigation",
+        "notes": [],
+    }
+
+    prompt_path = os.getenv("LANGFUSE_EXTRACTOR_PROMPT", DEFAULT_EXTRACTOR_PROMPT)
+
+    if not _langfuse_is_configured():
+        msg = "[extractor] Langfuse not configured — LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST missing"
+        logger.warning(msg)
+        print(f"WARNING: {msg}")
+        _FALLBACK["notes"].append("extractor LLM skipped — Langfuse credentials missing")
+        return _FALLBACK
+
+    cb_link_id = session_id
+    session_id = f"{session_id}-extractor"
+
+    # Full visible text — no cap. The cheap LLM reads everything and returns
+    # only the compact relevant sections forward.
+    visible_text = _normalize_text(page_result.get("visible_text"))
+    domain_shared = _is_shared_host(url)
+
+    variables = {
+        "provider": provider or "",
+        "service_name": service_name or "",
+        "url": url or "",
+        "domain_shared": str(domain_shared).lower(),
+        "page_title": _normalize_text(page_result.get("title")),
+        "headings": json.dumps(page_result.get("headings") or [], ensure_ascii=False),
+        "buttons": json.dumps(page_result.get("buttons") or [], ensure_ascii=False),
+        "login_form_present": str(is_login_form).lower(),
+        "visible_text": visible_text,
+    }
+
+    try:
+        build_messages, call_litellm, get_prompts_from_langfuse, parse_response = (
+            _load_langfuse_helpers()
+        )
+
+        system_prompt, user_prompt, config, prompt_obj = get_prompts_from_langfuse(
+            prompt_path=prompt_path,
+            session_id=session_id,
+            variables=variables,
+        )
+
+        messages = build_messages(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        response = await call_litellm(
+            config=config,
+            messages=messages,
+            session_id=session_id,
+            api_endpoint="/check/extractor",
+            tag_suffix="extractor",
+            extra_tags=[cb_link_id] if cb_link_id else [],
+            prompt=prompt_obj,
+        )
+
+        parsed = parse_response(response, has_functions=False, has_tools=False)
+
+        if isinstance(parsed, dict):
+            login_type_raw = str(parsed.get("login_type_suggestion", "direct")).strip().lower()
+            login_type = login_type_raw if login_type_raw in ("direct", "navigation") else "direct"
+
+            result = {
+                "bank_identifiers": _parse_notes(parsed.get("bank_identifiers")),
+                "relevant_page_sections": _parse_notes(parsed.get("relevant_page_sections")),
+                "login_signals": _parse_notes(parsed.get("login_signals")),
+                "is_login_page": bool(parsed.get("is_login_page", False)),
+                "login_type_suggestion": login_type,
+                "notes": [f"langfuse_session_id={session_id}"],
+            }
+
+            logger.info(
+                "[extractor] bank_ids=%d  sections=%d  login=%s  type=%s",
+                len(result["bank_identifiers"]),
+                len(result["relevant_page_sections"]),
+                result["is_login_page"],
+                result["login_type_suggestion"],
+            )
+            return result
+
+        msg = f"[extractor] LLM returned unstructured response: {str(parsed)[:300]}"
+        logger.warning(msg)
+        print(f"WARNING: {msg}")
+        _FALLBACK["notes"].append(f"extractor LLM unstructured response: {str(parsed)[:200]}")
+        _FALLBACK["notes"].append(f"langfuse_session_id={session_id}")
+        return _FALLBACK
+
+    except Exception as exc:
+        msg = f"[extractor] LLM call failed: {exc}"
+        logger.error(msg, exc_info=True)
+        print(f"ERROR: {msg}")
+        _FALLBACK["notes"].append(f"extractor_llm_error={exc}")
+        return _FALLBACK
+
+
+# Keep the old name as an alias so any external callers don't break
+extract_page_identifiers = extract_and_score
+assess_url_confidence = None  # no longer a separate function — handled inside extract_and_score
+
+
+# ---------------------------------------------------------------------------
+# Step 3 — Final Smart LLM: bank + provider + service match decision
+# ---------------------------------------------------------------------------
+
+async def assess_match_with_identifiers(
+    provider: str,
+    service_name: str,
+    url: str,
+    extractor_result: dict,
+    session_id: str = "",
+) -> dict:
+    """Final smart LLM call that decides bank/provider/service match.
+
+    Receives the URL directly (to assess domain/URL confidence) plus clean
+    pre-extracted signals from extract_and_score — no raw page text.
+
+    url_confidence_score is computed by this LLM (not the cheap extractor)
+    because it has more compute budget for nuanced domain analysis.
+
+    Args:
+        provider:          Bank/provider name from the DB row.
+        service_name:      Service name from the DB row.
+        url:               The login URL being verified.
+        extractor_result:  Output of extract_and_score() — contains bank_identifiers,
+                           relevant_page_sections, login_signals,
+                           is_login_page, login_type_suggestion.
+
+    Returns:
+        {
+          "bank_matched": bool,
+          "service_matched": bool,
+          "confidence_score": int (0-100),
+          "url_confidence_score": int (0-100),
+          "login_type": "direct" | "navigation",
+          "reason": str,
+          "notes": list[str],
+        }
+    """
+    _SKIP = {
+        "bank_matched": True,
+        "service_matched": True,
+        "confidence_score": 0,
+        "url_confidence_score": 0,
+        "login_type": extractor_result.get("login_type_suggestion", "direct"),
+        "reason": "Match check skipped.",
+        "notes": [],
+    }
+
+    if not provider and not service_name:
+        logger.info("[match] Skipped — both provider and service_name are empty")
+        _SKIP["reason"] = "No provider or service name provided — match check skipped."
+        _SKIP["notes"].append("provider/service match skipped — both fields empty")
+        return _SKIP
+
+    prompt_path = os.getenv("LANGFUSE_PROVIDER_MATCH_PROMPT", DEFAULT_PROVIDER_MATCH_PROMPT)
+
+    if not _langfuse_is_configured():
+        msg = "[match] Langfuse not configured — LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST missing"
+        logger.warning(msg)
+        print(f"WARNING: {msg}")
+        _SKIP["reason"] = "Langfuse not configured; match check skipped."
+        _SKIP["notes"].append("match LLM skipped — Langfuse credentials missing")
+        return _SKIP
+
+    cb_link_id = session_id
+    session_id = f"{session_id}-match"
+
+    variables = {
+        "provider": provider or "",
+        "service_name": service_name or "",
+        "url": url or "",
+        "bank_identifiers": json.dumps(extractor_result.get("bank_identifiers", []), ensure_ascii=False),
+        "relevant_page_sections": json.dumps(extractor_result.get("relevant_page_sections", []), ensure_ascii=False),
+        "login_signals": json.dumps(extractor_result.get("login_signals", []), ensure_ascii=False),
+        "is_login_page": str(extractor_result.get("is_login_page", False)).lower(),
+        "login_type_suggestion": extractor_result.get("login_type_suggestion", "direct"),
+    }
+
+    try:
+        build_messages, call_litellm, get_prompts_from_langfuse, parse_response = (
+            _load_langfuse_helpers()
+        )
+
+        system_prompt, user_prompt, config, prompt_obj = get_prompts_from_langfuse(
+            prompt_path=prompt_path,
+            session_id=session_id,
+            variables=variables,
+        )
+
+        messages = build_messages(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        response = await call_litellm(
+            config=config,
+            messages=messages,
+            session_id=session_id,
+            api_endpoint="/check/match",
+            tag_suffix="match",
+            extra_tags=[cb_link_id] if cb_link_id else [],
+            prompt=prompt_obj,
+        )
+
+        parsed = parse_response(response, has_functions=False, has_tools=False)
+
+        if isinstance(parsed, dict):
+            bank_matched = bool(parsed.get("bank_matched", False))
+            service_matched = bool(parsed.get("service_matched", False))
+            confidence_score = max(0, min(int(parsed.get("confidence_score", 0)), 100))
+            url_confidence_score = max(0, min(int(parsed.get("url_confidence_score", 0)), 100))
+            login_type_raw = str(parsed.get("login_type", extractor_result.get("login_type_suggestion", "direct"))).strip().lower()
+            login_type = login_type_raw if login_type_raw in ("direct", "navigation") else "direct"
+            reason = parsed.get("reason") or (
+                "Page matches the claimed provider and service."
+                if (bank_matched and service_matched)
+                else "Page does NOT match the claimed provider or service."
+            )
+            notes = _parse_notes(parsed.get("notes"))
+            notes.append(f"langfuse_session_id={session_id}")
+
+            logger.info(
+                "[match] bank=%s  service=%s  score=%d  url_conf=%d  type=%s",
+                bank_matched, service_matched, confidence_score, url_confidence_score, login_type,
+            )
+            return {
+                "bank_matched": bank_matched,
+                "service_matched": service_matched,
+                "confidence_score": confidence_score,
+                "url_confidence_score": url_confidence_score,
+                "login_type": login_type,
+                "reason": reason,
+                "notes": notes,
+            }
+
+        msg = f"[match] LLM returned unstructured response: {str(parsed)[:300]}"
+        logger.warning(msg)
+        print(f"WARNING: {msg}")
+        _SKIP["reason"] = f"Match LLM returned unstructured response: {str(parsed)[:200]}"
+        _SKIP["notes"].append(f"langfuse_session_id={session_id}")
+        return _SKIP
+
+    except Exception as exc:
+        msg = f"[match] LLM call failed: {exc}"
+        logger.error(msg, exc_info=True)
+        print(f"ERROR: {msg}")
+        _SKIP["reason"] = f"Match LLM call failed: {exc}"
+        _SKIP["notes"].append(f"match_llm_error={exc}")
+        return _SKIP
+
+
+# ---------------------------------------------------------------------------
+# assess_full_match — orchestrates Steps 1 → 2 → 3
+# ---------------------------------------------------------------------------
+
+async def assess_full_match(
+    provider: str,
+    service_name: str,
+    url: str,
+    page_result: dict,
+    session_id: str = "",
+) -> dict:
+    """Run the two-stage bank/provider/service match pipeline.
+
+    Stage 1 (cheap LLM — extract_and_score):
+        Receives url + bank name + service name + all extracted page sections
+        in a single call. Returns bank_identifiers, relevant_page_sections,
+        login_signals, is_login_page, login_type_suggestion.
+
+    Stage 2 (final smart LLM — assess_match_with_identifiers):
+        Receives the URL directly plus the compact clean signals from Stage 1.
+        Computes url_confidence_score itself (more compute budget).
+        Returns bank_matched, service_matched, confidence_score,
+        url_confidence_score, login_type, reason.
+    """
+    extractor_result = await extract_and_score(provider, service_name, url, page_result, session_id=session_id)
+
+    result = await assess_match_with_identifiers(provider, service_name, url, extractor_result, session_id=session_id)
+
+    result["notes"] = (
+        [f"url_confidence_score={result.get('url_confidence_score', 0)}"]
+        + result.get("notes", [])
+        + extractor_result.get("notes", [])
+    )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Legacy stubs — kept so existing call-sites don't hard-crash during migration
 # ---------------------------------------------------------------------------
 
 async def assess_direct_login_page(
@@ -96,222 +478,50 @@ async def assess_direct_login_page(
     service_name: str,
     page_result: dict,
 ) -> dict:
-    """Ask the LLM whether *page_result* represents a login portal.
+    """Deprecated stub — login detection is now handled by extract_page_identifiers (Step 2).
 
-    Returns:
-        {
-          "is_login_page": bool,
-          "score": int  (0-100),
-          "reason": str,
-          "notes": list[str],
-        }
+    Returns a shim in the old format derived from the page_result login_form_present
+    flag so existing callers that haven't been migrated yet don't crash.
     """
-    prompt_path = os.getenv("LANGFUSE_DIRECT_LOGIN_PROMPT", DEFAULT_DIRECT_LOGIN_PROMPT)
-
-    if not _langfuse_is_configured():
-        logger.warning("[direct-login] Langfuse not configured — skipping")
-        return {
-            "is_login_page": False,
-            "score": 0,
-            "reason": "Langfuse not configured; direct login check skipped.",
-            "notes": ["direct-login LLM check skipped — Langfuse credentials missing"],
-        }
-
-    session_id = f"direct-login-{uuid4()}"
-    variables = _build_page_variables(provider, service_name, page_result)
-
-    logger.info(
-        "[direct-login] Calling LLM  prompt=%s  session=%s  provider=%s  service=%s",
-        prompt_path, session_id, provider, service_name,
+    is_login = bool(page_result.get("login_form_present", False))
+    logger.debug(
+        "[direct-login] stub called — returning deterministic fallback  is_login=%s", is_login
     )
+    return {
+        "is_login_page": is_login,
+        "score": 80 if is_login else 20,
+        "reason": (
+            "Login form detected on page (deterministic fallback)."
+            if is_login
+            else "No login form detected on page (deterministic fallback)."
+        ),
+        "notes": ["direct-login delegated to extract_page_identifiers (Step 2)"],
+    }
 
-    try:
-        build_messages, call_litellm, get_prompts_from_langfuse, parse_response = (
-            _load_langfuse_helpers()
-        )
-
-        system_prompt, user_prompt, config, prompt_obj = get_prompts_from_langfuse(
-            prompt_path=prompt_path,
-            session_id=session_id,
-            variables=variables,
-        )
-
-        messages = build_messages(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
-
-        logger.debug("[direct-login] Sending %d messages to model=%s", len(messages), config.get("model"))
-
-        response = await call_litellm(
-            config=config,
-            messages=messages,
-            session_id=session_id,
-            api_endpoint="/check/direct-login",
-            tag_suffix="2",
-            prompt=prompt_obj,
-        )
-
-        parsed = parse_response(response, has_functions=False, has_tools=False)
-        logger.info("[direct-login] Raw LLM response: %s", str(parsed)[:500])
-
-        if isinstance(parsed, dict):
-            is_login = bool(parsed.get("is_login_page", False))
-            score = max(0, min(int(parsed.get("score", 0)), 100))
-            reason = parsed.get("reason") or (
-                "Page identified as a login portal."
-                if is_login
-                else "Page does not appear to be a login portal."
-            )
-            notes = _parse_notes(parsed.get("notes"))
-            notes.append(f"langfuse_session_id={session_id}")
-
-            logger.info(
-                "[direct-login] Result: is_login_page=%s  score=%d  reason=%s",
-                is_login, score, reason,
-            )
-            return {
-                "is_login_page": is_login,
-                "score": score,
-                "reason": reason,
-                "notes": notes,
-            }
-
-        logger.warning("[direct-login] LLM returned unstructured response: %s", str(parsed)[:300])
-        return {
-            "is_login_page": False,
-            "score": 0,
-            "reason": f"Direct login LLM returned unstructured response: {str(parsed)[:300]}",
-            "notes": [f"langfuse_session_id={session_id}"],
-        }
-
-    except Exception as exc:
-        logger.error("[direct-login] LLM call failed: %s", exc, exc_info=True)
-        return {
-            "is_login_page": False,
-            "score": 0,
-            "reason": f"Direct login LLM check failed: {exc}",
-            "notes": [f"llm_error={exc}", f"langfuse_session_id={session_id}"],
-        }
-
-
-# ---------------------------------------------------------------------------
-# Provider / service-name page-match check
-# ---------------------------------------------------------------------------
 
 async def assess_provider_service_match(
     provider: str,
     service_name: str,
     page_result: dict,
 ) -> dict:
-    """Ask the LLM whether *page_result* belongs to the claimed provider/service.
+    """Deprecated stub — provider/service matching is now handled by assess_full_match.
 
-    Returns:
-        {
-          "matched": bool,
-          "score": int  (0-100),
-          "reason": str,
-          "notes": list[str],
-        }
+    Delegates to assess_full_match and reshapes the result to the old format
+    so existing callers that haven't been migrated yet don't crash.
     """
-    if not provider and not service_name:
-        logger.info("[provider-match] Skipped — both provider and service_name are empty")
-        return {
-            "matched": True,
-            "score": 0,
-            "reason": "No provider or service name provided — match check skipped.",
-            "notes": ["provider/service match skipped — both fields empty"],
-        }
-
-    prompt_path = os.getenv(
-        "LANGFUSE_PROVIDER_MATCH_PROMPT", DEFAULT_PROVIDER_MATCH_PROMPT
+    logger.debug(
+        "[provider-match] stub called — delegating to assess_full_match  provider=%s  service=%s",
+        provider, service_name,
     )
-
-    if not _langfuse_is_configured():
-        logger.warning("[provider-match] Langfuse not configured — skipping")
-        return {
-            "matched": True,
-            "score": 0,
-            "reason": "Langfuse not configured; provider/service match check skipped.",
-            "notes": ["provider/service LLM check skipped — Langfuse credentials missing"],
-        }
-
-    session_id = f"provider-match-{uuid4()}"
-    variables = _build_page_variables(provider, service_name, page_result)
-
-    logger.info(
-        "[provider-match] Calling LLM  prompt=%s  session=%s  provider=%s  service=%s",
-        prompt_path, session_id, provider, service_name,
-    )
-
-    try:
-        build_messages, call_litellm, get_prompts_from_langfuse, parse_response = (
-            _load_langfuse_helpers()
-        )
-
-        system_prompt, user_prompt, config, prompt_obj = get_prompts_from_langfuse(
-            prompt_path=prompt_path,
-            session_id=session_id,
-            variables=variables,
-        )
-
-        messages = build_messages(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
-
-        logger.debug("[provider-match] Sending %d messages to model=%s", len(messages), config.get("model"))
-
-        response = await call_litellm(
-            config=config,
-            messages=messages,
-            session_id=session_id,
-            api_endpoint="/check/provider-match",
-            tag_suffix="3",
-            prompt=prompt_obj,
-        )
-
-        parsed = parse_response(response, has_functions=False, has_tools=False)
-        logger.info("[provider-match] Raw LLM response: %s", str(parsed)[:500])
-
-        if isinstance(parsed, dict):
-            matched = bool(parsed.get("matched", False))
-            score = max(0, min(int(parsed.get("score", 0)), 100))
-            reason = parsed.get("reason") or (
-                "Page content matches the claimed provider/service."
-                if matched
-                else "Page content does NOT match the claimed provider/service."
-            )
-            notes = _parse_notes(parsed.get("notes"))
-            notes.append(f"langfuse_session_id={session_id}")
-
-            logger.info(
-                "[provider-match] Result: matched=%s  score=%d  reason=%s",
-                matched, score, reason,
-            )
-            return {
-                "matched": matched,
-                "score": score,
-                "reason": reason,
-                "notes": notes,
-            }
-
-        logger.warning("[provider-match] LLM returned unstructured response: %s", str(parsed)[:300])
-        return {
-            "matched": True,
-            "score": 0,
-            "reason": f"Provider match LLM returned unstructured response: {str(parsed)[:300]}",
-            "notes": [f"langfuse_session_id={session_id}"],
-        }
-
-    except Exception as exc:
-        logger.error("[provider-match] LLM call failed: %s", exc, exc_info=True)
-        return {
-            "matched": True,
-            "score": 0,
-            "reason": f"Provider/service match LLM check failed: {exc}",
-            "notes": [f"llm_error={exc}", f"langfuse_session_id={session_id}"],
-        }
+    url = page_result.get("final_url") or page_result.get("original_url") or ""
+    full = await assess_full_match(provider, service_name, url, page_result)
+    matched = full.get("bank_matched", True) and full.get("service_matched", True)
+    return {
+        "matched": matched,
+        "score": full.get("confidence_score", 0),
+        "reason": full.get("reason", ""),
+        "notes": full.get("notes", []),
+    }
 
 
 # ---------------------------------------------------------------------------

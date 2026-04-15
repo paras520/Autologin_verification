@@ -136,8 +136,6 @@ def detect_soft_errors(content):
 
 
 async def check_url_health(url):
-    logger.info("=== Health check started for %s ===", url)
-
     result = {
         "original_url": url,
         "final_url": None,
@@ -147,6 +145,8 @@ async def check_url_health(url):
         "redirect_chain": [],
         "load_time_ms": None,
         "token_detected": None,
+        "soft_errors": [],
+        "page_result": {},
     }
 
     token_info = detect_url_token(url)
@@ -164,7 +164,6 @@ async def check_url_health(url):
 
         try:
             socket.gethostbyname(domain)
-            logger.info("DNS resolved for %s", domain)
         except socket.gaierror:
             result["health"] = "INACTIVE"
             result["reason"] = "DNS_FAILURE"
@@ -181,15 +180,6 @@ async def check_url_health(url):
 
         result["final_url"] = response.url
         result["status"] = response.status_code
-
-        logger.info(
-            "HTTP %d from %s → %s  content_type=%s  redirects=%d",
-            response.status_code,
-            url,
-            response.url,
-            response.headers.get("Content-Type", "unknown"),
-            len(response.history),
-        )
 
         status = response.status_code
 
@@ -235,20 +225,12 @@ async def check_url_health(url):
 
     finally:
         result["load_time_ms"] = int((time.time() - start_time) * 1000)
-        logger.info("HTTP check completed in %dms  health=%s", result["load_time_ms"], result["health"])
 
     page_result = await extract_visible_layer(url, MAX_LOAD_TIME)
 
-    logger.info(
-        "Page extraction done: title=%s  visible_text_length=%s  load_error=%s",
-        page_result.get("title"),
-        page_result.get("visible_text_length"),
-        page_result.get("load_error"),
-    )
-
     soft_errors = detect_soft_errors(page_result["headings"])
     if soft_errors:
-        logger.info("Soft errors detected: %s", soft_errors)
+        logger.warning("Soft errors detected in page headings: %s", soft_errors)
 
     result["soft_errors"] = soft_errors
     result["page_result"] = page_result
