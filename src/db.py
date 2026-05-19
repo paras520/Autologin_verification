@@ -11,9 +11,12 @@ Expected env var:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import ssl
+import time
+import uuid
 from urllib.parse import urlparse, parse_qs
 from typing import Any
 
@@ -82,5 +85,145 @@ async def fetch_rows(cb_link_id: str, include_inactive: bool = True) -> list[dic
         rows = await conn.fetch(query, *params)
         logger.info("[db] fetched %d rows for %s", len(rows), cb_link_id)
         return [dict(row) for row in rows]
+    finally:
+        await conn.close()
+
+
+async def create_activity_run(
+    cb_link_ids: list[str],
+    triggered_by: str = "system",
+) -> str:
+    """Insert one activity_runs row (status=queued) plus one activity_run_items row per
+    cb_link_id into the shared whitelist-loging-services DB.  Returns the run UUID."""
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL environment variable is not set.")
+
+    run_id = uuid.uuid4()
+    now_ms = int(time.time() * 1000)
+
+    connect_kwargs = _build_connect_kwargs(dsn)
+    conn = await asyncpg.connect(**connect_kwargs)
+    try:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO activity_runs
+                    (id, activity_type, run_mode, source_module, triggered_by,
+                     triggered_at, status, total_items, success_items, failed_items,
+                     created_at, updated_at)
+                VALUES ($1, 'autologin_verification', 'adhoc'::run_mode_enum,
+                        'autologin_verification', $2, $3,
+                        'queued'::run_status_enum, $4, 0, 0, $3, $3)
+                """,
+                run_id, triggered_by, now_ms, len(cb_link_ids),
+            )
+            for cb_link_id in cb_link_ids:
+                await conn.execute(
+                    """
+                    INSERT INTO activity_run_items
+                        (id, run_id, entity_type, entity_id, queued_at, status,
+                         attempt_count, created_at, updated_at)
+                    VALUES ($1, $2, 'cb_link_id', $3, $4,
+                            'queued'::item_status_enum, 1, $4, $4)
+                    """,
+                    uuid.uuid4(), run_id, cb_link_id, now_ms,
+                )
+        logger.info("[db] created activity_run %s for %d cb_links", run_id, len(cb_link_ids))
+        return str(run_id)
+    finally:
+        await conn.close()
+
+
+async def start_activity_run(run_id: str) -> None:
+    """Transition activity_runs status → running and set started_at."""
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL environment variable is not set.")
+
+    now_ms = int(time.time() * 1000)
+    connect_kwargs = _build_connect_kwargs(dsn)
+    conn = await asyncpg.connect(**connect_kwargs)
+    try:
+        await conn.execute(
+            """
+            UPDATE activity_runs
+            SET status = 'running'::run_status_enum, started_at = $1, updated_at = $1
+            WHERE id = $2::uuid
+            """,
+            now_ms, run_id,
+        )
+    finally:
+        await conn.close()
+
+
+async def upsert_run_item_result(
+    run_id: str,
+    cb_link_id: str,
+    metrics: dict,
+    succeeded: bool,
+) -> None:
+    """Write verification metrics onto the matching activity_run_items row."""
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL environment variable is not set.")
+
+    now_ms = int(time.time() * 1000)
+    status = "completed" if succeeded else "failed"
+    connect_kwargs = _build_connect_kwargs(dsn)
+    conn = await asyncpg.connect(**connect_kwargs)
+    try:
+        await conn.execute(
+            """
+            UPDATE activity_run_items
+            SET status = $1::item_status_enum,
+                ended_at = $2,
+                metrics  = $3::jsonb,
+                updated_at = $2
+            WHERE run_id = $4::uuid AND entity_id = $5
+            """,
+            status, now_ms, json.dumps(metrics), run_id, cb_link_id,
+        )
+    finally:
+        await conn.close()
+
+
+async def finalize_activity_run(
+    run_id: str,
+    success_items: int,
+    failed_items: int,
+) -> None:
+    """Set final status, end timestamp, and item counts on the activity_runs row."""
+    dsn = os.getenv("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL environment variable is not set.")
+
+    now_ms = int(time.time() * 1000)
+    if failed_items == 0:
+        final_status = "completed"
+    elif success_items == 0:
+        final_status = "failed"
+    else:
+        final_status = "partial"
+
+    connect_kwargs = _build_connect_kwargs(dsn)
+    conn = await asyncpg.connect(**connect_kwargs)
+    try:
+        await conn.execute(
+            """
+            UPDATE activity_runs
+            SET status        = $1::run_status_enum,
+                ended_at      = $2,
+                success_items = $3,
+                failed_items  = $4,
+                updated_at    = $2
+            WHERE id = $5::uuid
+            """,
+            final_status, now_ms, success_items, failed_items, run_id,
+        )
+        logger.info(
+            "[db] finalized activity_run %s → %s (ok=%d fail=%d)",
+            run_id, final_status, success_items, failed_items,
+        )
     finally:
         await conn.close()

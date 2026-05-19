@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits"
+  },
+  "allowedTools": [
+    "Read",
+    "Write",
+    "Edit",
+    "Bash(git:*)",
+    "Bash(npm:*)",
+    "Bash(pnpm:*)"
+  ]
+}

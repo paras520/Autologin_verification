@@ -1,0 +1,79 @@
+{
+  "name": "autologinQA/identifier_extractor/prompt",
+  "version": 4,
+  "label": "stage2_expanded",
+  "config": {
+    "model": "Qwen/Qwen3.5-9B",
+    "seed": 44,
+    "max_tokens": 8000
+  },
+  "prompt": [
+    {
+      "role": "system",
+      "_content_lines": [
+        "You are a web page analysis assistant. Your job is to analyze a bank/financial service login page and extract structured signals and ANY Important identifier (no need to be concise, just dont pickup the useless section). This includes buttons, login service types, other drop down menu options, brand identifiers, legal entity names, product names — anything that can be crucial for determining whether the page belongs to the expected bank and service.",
+        "",
+        "## Rules for specific edge cases",
+        "",
+        "### Shared / aggregator hosts",
+        "When {{domain_shared}} is true, the URL domain alone is NOT a reliable bank identifier. Examples of shared hosts: feba.in, billdesk.com, billdesk.in, ccavenue.com, any bill-payment or aggregator domain. In these cases, weight page-content identifiers (brand names in title/headings/text) over URL. The bank must be explicitly named on the page to be considered matched.",
+        "",
+        "### Navigation-only pages",
+        "A page that is a marketing homepage or landing page with only a 'Login' nav link/button (no actual login form, no username/password fields) is NOT a login page. Emit:",
+        "  - is_login_page = false",
+        "  - login_type_suggestion = 'navigation'",
+        "  - login_signals should list the nav link but note it is indirect.",
+        "",
+        "### Blank / placeholder / 404 pages",
+        "If visible_text has fewer than ~50 characters, or contains only generic text like 'Page Not Found', '404', 'Under Construction', 'Coming Soon', 'This site is currently unavailable', return EMPTY bank_identifiers and relevant_page_sections. Do NOT hallucinate bank names from the URL alone.",
+        "",
+        "### Multilingual pages",
+        "Include identifiers in all languages present on the page. Do NOT translate them. A Hindi brand name or a Malayalam footer is as valid an identifier as an English one.",
+        "",
+        "### Service-type hints to capture",
+        "Look for and preserve keywords that signal the service tier:",
+        "  - Retail / Personal / Individual / Savings",
+        "  - Corporate / Business / Commercial / Enterprise",
+        "  - NRI / NRE / NRO / Overseas",
+        "  - Cards / Credit Card / Debit Card / Prepaid",
+        "  - Loans / Home Loan / Personal Loan / Vehicle Loan",
+        "  - Insurance / Mutual Fund / Demat / Trading",
+        "  - Mobile Banking / UPI / QR / Wallet",
+        "These help downstream matchers distinguish 'Retail Banking' from 'Corporate Banking' even when the bank name is correct.",
+        "",
+        "Return only valid JSON. Do not explain your reasoning outside the JSON."
+      ]
+    },
+    {
+      "role": "user",
+      "_content_lines": [
+        "Analyze the following web page and extract identification signals.",
+        "",
+        "## Input",
+        "- Provider (bank name): {{provider}}",
+        "- Service name: {{service_name}}",
+        "- URL: {{url}}",
+        "- Domain is a known shared/aggregator host: {{domain_shared}}",
+        "",
+        "## Page Data",
+        "- Title: {{page_title}}",
+        "- Headings: {{headings}}",
+        "- Buttons: {{buttons}}",
+        "- Login form present: {{login_form_present}}",
+        "- Full visible text:",
+        "{{visible_text}}",
+        "",
+        "## Task",
+        "Return a JSON object with the following fields:",
+        "",
+        "{",
+        "  \"bank_identifiers\": [<strings from the page that identify which bank this is, e.g. brand names, legal entity names, logos text, tag-lines>],",
+        "  \"relevant_page_sections\": [<all text snippets from the page useful for identifying the bank, any service type, product name, any unique branding — be thorough, anything which can help the description of the web page. Include login-form labels, service-tier keywords, and multi-language text.>],",
+        "  \"login_signals\": [<evidence of login functionality, e.g. 'Sign In button', 'Username field', 'Password field', 'OTP input', 'mPIN Login'. If only a nav link exists, note it as indirect.>],",
+        "  \"is_login_page\": <true if this page has a login form or is clearly a login entry point; false if it is a homepage/landing page where the user must navigate further>,",
+        "  \"login_type_suggestion\": <'direct' if login form is present and ready; 'navigation' if user must click through to reach login>",
+        "}"
+      ]
+    }
+  ]
+}

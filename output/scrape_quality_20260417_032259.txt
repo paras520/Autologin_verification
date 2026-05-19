@@ -1,0 +1,68 @@
+=== SCRAPING QUALITY SUMMARY ===
+Total URLs: 297
+Hard failures (timeout/exception): 4
+
+Extraction quality:
+  high       217  ( 73.1%)
+  medium      25  (  8.4%)
+  low         34  ( 11.4%)
+  empty        6  (  2.0%)
+  unknown     11  (  3.7%)
+
+Health status:
+  OK         264
+  INACTIVE   27
+  REDIRECT   2
+
+Attempts distribution:
+  0 attempt(s): 3
+  1 attempt(s): 242
+  2 attempt(s): 37
+HTML fallback used: 8
+Text length median=535 p10=37 max=51087
+
+=== FAILING URLs (44) ===
+  [low     ] len=  85 https://mycards.hdfcbank.com/  extra=200
+  [ERROR   ] len=   0 https://netportal.hdfcbank.com/login  extra=timeout
+  [low     ] len=  61 https://homeloans.kotak.bank.in/loginDetail?pn=HL&flow=login  extra=200
+  [low     ] len=   5 https://neo.kotaksecurities.com/Login/  extra=200
+  [low     ] len=  38 https://earlycredit.indusind.bank.in/auth/login  extra=200
+  [low     ] len=  31 https://indusdirect.indusind.bank.in/indusdirect/auth  extra=200
+  [low     ] len=  56 https://bankofbaroda.bank.in/nri-banking  extra=403
+  [low     ] len=  20 https://online.bobworldetrade.com/#/  extra=200
+  [empty   ] len=   0 https://barodagurukul.co.in/login/index.php  extra=404
+  [low     ] len=   9 https://bobcrm.bankofbaroda.bank.in/dsaportal/login.aspx  extra=200
+  [low     ] len=  61 https://vendorportal.bankofbaroda.co.in/vendorportal/login.aspx  extra=404
+  [low     ] len=  57 https://csis.canarabank.bank.in/HolidayHomeWeb/LoginPage.aspx  extra=200
+  [ERROR   ] len=   0 https://yesbusiness.yes.bank.in/  extra=timeout
+  [ERROR   ] len=   0 https://yesconnect.yes.bank.in/integrated-applications  extra=timeout
+  [ERROR   ] len=   0 https://yesconnect.yes.bank.in/  extra=timeout
+  [empty   ] len=   0 https://yessmartpay.yes.bank.in/pay/web/login/index  extra=None
+  [empty   ] len=   0 https://yesonline.yesbank.co.in/index.html?module=login  extra=None
+  [low     ] len=  88 https://apps.idbi.bank.in/pensioner/pensioner.asp?option=payslip  extra=200
+  [low     ] len=  67 https://apps.idbi.bank.in/retired-portal/login.aspx  extra=200
+  [low     ] len=  35 https://icorp.pnb.bank.in/corp/AuthenticationController?FORMSGROUP_ID__=Authenti  extra=None
+  [empty   ] len=   0 https://iretail.pnb.bank.in/corp/AuthenticationController?FORMSGROUP_ID__=Authen  extra=None
+  [low     ] len=  95 https://pnbtfr.pnb.bank.in/omniapp/pages/login/loginapp.app  extra=200
+  [low     ] len=  37 https://hrconnect.indianbank.bank.in/  extra=200
+  [low     ] len=  22 https://prepaid.karurvysya.bank.in/nconeportal/kvb/html  extra=200
+  [low     ] len=  34 https://scf.centralbank.bank.in/  extra=200
+  [low     ] len=  19 https://reports.jkb.bank.in/  extra=200
+  [low     ] len=  28 https://mail.jkbmail.com/  extra=200
+  [empty   ] len=   0 https://www.onlinebanking.cub.bank.in/servlet/cb.servlets.CBLoginServlet  extra=200
+  [low     ] len=  60 https://dbonline.deutsche-bank.es/  extra=403
+  [empty   ] len=   0 https://online.dws.de/  extra=200
+  [low     ] len=  77 https://www.nainitalbank.bank.in/CircularSystem/MemberLogin.aspx  extra=200
+  [low     ] len=  75 https://punjabandsind.bank.in/module/online-login  extra=200
+  [low     ] len=  73 https://qnb.coupahost.com/  extra=200
+  [low     ] len=  29 https://ib.qnb.com/identity/login  extra=200
+  [low     ] len=  96 https://apps.eu.abnamroclearing.com/portal  extra=200
+  [low     ] len=  56 https://rrb.cedgepps.in/RGB/#/auth/login  extra=200
+  [low     ] len=  73 https://rgb.bank.in/pension/  extra=200
+  [low     ] len=  34 https://prepaid.tmbdigital.bank.in/noneportal/tmb/html  extra=200
+  [low     ] len=  30 https://prepaid.tmbdigital.bank.in/coneportal/tmb/html  extra=200
+  [low     ] len=  45 https://upimerchant.tmbdigital.bank.in/  extra=200
+  [low     ] len=  80 https://apps.tmbdigital.bank.in/onlstock/  extra=200
+  [low     ] len=  76 https://adv-crlmsrms2.iob.bank.in/public/  extra=200
+  [low     ] len=  73 https://epay.federalbank.co.in/easypayments/  extra=200
+  [low     ] len=  43 https://fednet.federal.bank.in/  extra=200

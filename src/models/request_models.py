@@ -17,8 +17,10 @@ class BatchCheckRequest(BaseModel):
     Example:
         {
             "cb_link_ids": ["B-IN-i9i6wf"],
-            "include_inactive": true
+            "include_inactive": true,
+            "triggered_by": "m114"
         }
     """
     cb_link_ids: list[str] = Field(..., min_length=1)
     include_inactive: bool = True
+    triggered_by: str | None = None

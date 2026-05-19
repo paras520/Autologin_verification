@@ -1,0 +1,726 @@
+[
+  {
+    "id": "hdfc-netbanking-correct",
+    "description": "HDFC NetBanking login — correct match, direct login",
+    "input": {
+      "provider": "HDFC Bank",
+      "service_name": "NetBanking",
+      "url": "https://netbanking.hdfcbank.com/netbanking/",
+      "page_data": {
+        "title": "HDFC Bank NetBanking",
+        "headings": [
+          "Welcome to HDFC NetBanking",
+          "Login"
+        ],
+        "buttons": [
+          "CONTINUE",
+          "Forgot Password"
+        ],
+        "login_form_present": true,
+        "visible_text": "HDFC Bank NetBanking Welcome to HDFC NetBanking Login Customer ID Password CONTINUE Forgot Password? New to NetBanking? Register Now Terms and Conditions Privacy Policy HDFC Bank Ltd. All rights reserved."
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 95,
+      "url_confidence_score": 95,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "sbi-personal-banking-correct",
+    "description": "SBI Personal Banking — correct match, direct login",
+    "input": {
+      "provider": "State Bank of India",
+      "service_name": "Personal Banking",
+      "url": "https://retail.onlinesbi.sbi/retail/login.htm",
+      "page_data": {
+        "title": "State Bank of India - Personal Banking",
+        "headings": [
+          "Online SBI",
+          "Personal Banking",
+          "Login"
+        ],
+        "buttons": [
+          "Login",
+          "Forgot Username",
+          "Forgot Password",
+          "New User Registration"
+        ],
+        "login_form_present": true,
+        "visible_text": "State Bank of India Online SBI Personal Banking Login Username Password Login Forgot Username? Forgot Password? New User Registration Online SBI is a service of State Bank of India. © State Bank of India"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 95,
+      "url_confidence_score": 90,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "icici-corporate-correct",
+    "description": "ICICI Corporate Banking — correct match, direct login",
+    "input": {
+      "provider": "ICICI Bank",
+      "service_name": "Corporate Banking",
+      "url": "https://cilogin.icicibank.com/corp/AuthenticationController",
+      "page_data": {
+        "title": "ICICI Bank Corporate Internet Banking",
+        "headings": [
+          "Corporate Internet Banking",
+          "Login"
+        ],
+        "buttons": [
+          "Login",
+          "First Time User"
+        ],
+        "login_form_present": true,
+        "visible_text": "ICICI Bank Corporate Internet Banking User ID Password Login First Time User? Important: Do not share your login credentials with anyone. ICICI Bank Ltd. Corporate Office: ICICI Bank Towers, Bandra-Kurla Complex, Mumbai"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 95,
+      "url_confidence_score": 95,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "axis-retail-correct",
+    "description": "Axis Bank Retail Internet Banking — correct match",
+    "input": {
+      "provider": "Axis Bank",
+      "service_name": "Retail Internet Banking",
+      "url": "https://retail.axisbank.co.in/wps/portal/rBanking/axisebanking/AxisRetailLogin",
+      "page_data": {
+        "title": "Axis Bank - Internet Banking",
+        "headings": [
+          "Axis Bank Internet Banking",
+          "Welcome to Axis Bank"
+        ],
+        "buttons": [
+          "Login",
+          "Register",
+          "Forgot Password"
+        ],
+        "login_form_present": true,
+        "visible_text": "Axis Bank Internet Banking Welcome to Axis Bank Retail Internet Banking Login ID Password Login Register Now Forgot Password? Important Alerts: Beware of phishing attempts. Axis Bank Ltd."
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 92,
+      "url_confidence_score": 90,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "kotak-811-correct",
+    "description": "Kotak 811 account — correct match, navigation needed",
+    "input": {
+      "provider": "Kotak Mahindra Bank",
+      "service_name": "Kotak 811",
+      "url": "https://www.kotak.com/en/digital-banking/811.html",
+      "page_data": {
+        "title": "Kotak 811 - Open Zero Balance Savings Account Online",
+        "headings": [
+          "Kotak 811",
+          "Features",
+          "How to Open",
+          "FAQs"
+        ],
+        "buttons": [
+          "Open Account Now",
+          "Login",
+          "Download App"
+        ],
+        "login_form_present": false,
+        "visible_text": "Kotak 811 Open Zero Balance Savings Account Online Features Zero Balance Account UPI Payments Virtual Debit Card How to Open 811 Account Download Kotak 811 App Register using Aadhaar Kotak Mahindra Bank Limited"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 85,
+      "url_confidence_score": 90,
+      "is_login_page": false,
+      "login_type": "navigation",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "mizoram-to-rajasthan-mismatch",
+    "description": "Bank mismatch — Mizoram bank URL redirected to Rajasthan bank page",
+    "input": {
+      "provider": "Mizoram Rural Bank",
+      "service_name": "Internet Banking",
+      "url": "https://www.rajcrb.in/internetbanking",
+      "page_data": {
+        "title": "Rajasthan Central Rural Bank - Internet Banking",
+        "headings": [
+          "Rajasthan Central Rural Bank",
+          "Internet Banking Login"
+        ],
+        "buttons": [
+          "Login",
+          "Register"
+        ],
+        "login_form_present": true,
+        "visible_text": "Rajasthan Central Rural Bank Internet Banking Login User ID Password Login Register New User Rajasthan Central Rural Bank Head Office: Jaipur, Rajasthan Toll Free: 1800-180-6546"
+      }
+    },
+    "expected_output": {
+      "bank_matched": false,
+      "service_matched": true,
+      "confidence_score": 10,
+      "url_confidence_score": 5,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "canara-to-different-bank",
+    "description": "Bank mismatch — Canara Bank URL leads to SBI page",
+    "input": {
+      "provider": "Canara Bank",
+      "service_name": "Net Banking",
+      "url": "https://retail.onlinesbi.sbi/retail/login.htm",
+      "page_data": {
+        "title": "State Bank of India - Personal Banking",
+        "headings": [
+          "Online SBI",
+          "Personal Banking"
+        ],
+        "buttons": [
+          "Login",
+          "Forgot Password"
+        ],
+        "login_form_present": true,
+        "visible_text": "State Bank of India Online SBI Personal Banking Login Username Password Login Forgot Username? State Bank of India. All rights reserved."
+      }
+    },
+    "expected_output": {
+      "bank_matched": false,
+      "service_matched": false,
+      "confidence_score": 5,
+      "url_confidence_score": 0,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "hdfc-corporate-vs-retail-service-mismatch",
+    "description": "Service mismatch — URL is retail but expected corporate",
+    "input": {
+      "provider": "HDFC Bank",
+      "service_name": "Corporate Banking",
+      "url": "https://netbanking.hdfcbank.com/netbanking/",
+      "page_data": {
+        "title": "HDFC Bank NetBanking",
+        "headings": [
+          "Welcome to HDFC NetBanking",
+          "Personal Banking Login"
+        ],
+        "buttons": [
+          "CONTINUE",
+          "Forgot Password"
+        ],
+        "login_form_present": true,
+        "visible_text": "HDFC Bank NetBanking Welcome to HDFC NetBanking Personal Banking Login Customer ID Password CONTINUE Forgot Password? New to NetBanking? Register Now HDFC Bank Ltd."
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": false,
+      "confidence_score": 40,
+      "url_confidence_score": 85,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "pnb-correct-aggregator",
+    "description": "PNB on shared aggregator host — correct match",
+    "input": {
+      "provider": "Punjab National Bank",
+      "service_name": "Internet Banking",
+      "url": "https://netpnb.com/NpbUI/",
+      "page_data": {
+        "title": "PNB Internet Banking",
+        "headings": [
+          "Punjab National Bank",
+          "Internet Banking"
+        ],
+        "buttons": [
+          "Login",
+          "New Registration",
+          "Forgot Password"
+        ],
+        "login_form_present": true,
+        "visible_text": "Punjab National Bank Internet Banking User ID Password Login New Registration Forgot Password? Security Tips Punjab National Bank Head Office: New Delhi"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 90,
+      "url_confidence_score": 80,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "bob-foreign-portal",
+    "description": "Bank of Baroda UK portal — wrong country but correct bank",
+    "input": {
+      "provider": "Bank of Baroda",
+      "service_name": "Internet Banking",
+      "url": "https://www.bankofbaroda.co.uk/online-banking",
+      "page_data": {
+        "title": "Bank of Baroda UK - Online Banking",
+        "headings": [
+          "Bank of Baroda UK",
+          "Online Banking",
+          "UK Operations"
+        ],
+        "buttons": [
+          "Login",
+          "Apply Now"
+        ],
+        "login_form_present": true,
+        "visible_text": "Bank of Baroda UK Online Banking Welcome to Bank of Baroda UK Division Login Customer ID Password Login Apply Now Bank of Baroda UK, London Branch, United Kingdom. Authorised by the Prudential Regulation Authority (PRA)"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 70,
+      "url_confidence_score": 65,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "idfc-homepage-not-login",
+    "description": "IDFC First Bank homepage — not a login page, navigation required",
+    "input": {
+      "provider": "IDFC First Bank",
+      "service_name": "Net Banking",
+      "url": "https://www.idfcfirstbank.com/",
+      "page_data": {
+        "title": "IDFC FIRST Bank - Always You First",
+        "headings": [
+          "IDFC FIRST Bank",
+          "Savings Account",
+          "Credit Cards",
+          "Home Loans",
+          "Personal Loans"
+        ],
+        "buttons": [
+          "Apply Now",
+          "Login",
+          "Open Account",
+          "Know More"
+        ],
+        "login_form_present": false,
+        "visible_text": "IDFC FIRST Bank Always You First Savings Account Credit Cards Home Loans Personal Loans Fixed Deposits Mutual Funds Login Apply Now Open Account Know More About IDFC FIRST Bank Customer Care WhatsApp Banking IDFC FIRST Bank Ltd."
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": false,
+      "confidence_score": 55,
+      "url_confidence_score": 90,
+      "is_login_page": false,
+      "login_type": "navigation",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "yes-bank-business-correct",
+    "description": "Yes Bank Business Banking — correct match",
+    "input": {
+      "provider": "Yes Bank",
+      "service_name": "Yes Business",
+      "url": "https://yesbusiness.yesbank.in/",
+      "page_data": {
+        "title": "YES BANK - Business Banking",
+        "headings": [
+          "Yes Business",
+          "Business Login"
+        ],
+        "buttons": [
+          "Login",
+          "Register",
+          "Track Application"
+        ],
+        "login_form_present": true,
+        "visible_text": "YES BANK Business Banking Yes Business Login Corporate ID User ID Password Login Register New User Track Application Status Yes Bank Ltd. Registered Office: Mumbai"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 93,
+      "url_confidence_score": 90,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "ghost-service-empty-page",
+    "description": "Ghost service — page has no meaningful content",
+    "input": {
+      "provider": "Federal Bank",
+      "service_name": "Quick Pay",
+      "url": "https://www.federalbank.co.in/quickpay-deprecated",
+      "page_data": {
+        "title": "Federal Bank",
+        "headings": [
+          "Federal Bank"
+        ],
+        "buttons": [],
+        "login_form_present": false,
+        "visible_text": "Federal Bank Page Not Found The page you are looking for does not exist or has been moved. Go to Homepage Federal Bank Ltd."
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": false,
+      "confidence_score": 20,
+      "url_confidence_score": 85,
+      "is_login_page": false,
+      "login_type": "navigation",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "union-bank-feba-aggregator",
+    "description": "Union Bank on feba.in aggregator — correct match via page content",
+    "input": {
+      "provider": "Union Bank of India",
+      "service_name": "U-Mobile",
+      "url": "https://umobile.feba.in/login",
+      "page_data": {
+        "title": "U-Mobile Banking - Union Bank of India",
+        "headings": [
+          "Union Bank of India",
+          "U-Mobile Banking"
+        ],
+        "buttons": [
+          "Login",
+          "mPIN Login",
+          "Register"
+        ],
+        "login_form_present": true,
+        "visible_text": "Union Bank of India U-Mobile Banking Login Mobile Number mPIN Login Register New User Forgot mPIN? Union Bank of India, powered by FEBA Technologies"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 88,
+      "url_confidence_score": 60,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "dbs-india-correct",
+    "description": "DBS Bank India — correct match on shared domain",
+    "input": {
+      "provider": "DBS Bank India",
+      "service_name": "digibank",
+      "url": "https://internet-banking.dbs.com.in/IB/Welcome",
+      "page_data": {
+        "title": "DBS Bank India - digibank",
+        "headings": [
+          "digibank by DBS",
+          "Internet Banking"
+        ],
+        "buttons": [
+          "Log in",
+          "Register for digibank"
+        ],
+        "login_form_present": true,
+        "visible_text": "digibank by DBS Internet Banking User ID Password Log in Register for digibank Forgot Password? DBS Bank India Limited. Registered Office: Mumbai"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 92,
+      "url_confidence_score": 85,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "random-unrelated-page",
+    "description": "Completely unrelated page — e-commerce site, not a bank",
+    "input": {
+      "provider": "Canara Bank",
+      "service_name": "Internet Banking",
+      "url": "https://www.amazon.in/",
+      "page_data": {
+        "title": "Amazon.in: Online Shopping India",
+        "headings": [
+          "Shop by Category",
+          "Today's Deals",
+          "Electronics"
+        ],
+        "buttons": [
+          "Sign In",
+          "Add to Cart",
+          "Buy Now"
+        ],
+        "login_form_present": false,
+        "visible_text": "Amazon.in Online Shopping India Shop by Category Electronics Fashion Home Kitchen Books Toys Sports Today's Deals Great Indian Festival Sign In Create Account Cart Amazon.in is a subsidiary of Amazon.com"
+      }
+    },
+    "expected_output": {
+      "bank_matched": false,
+      "service_matched": false,
+      "confidence_score": 0,
+      "url_confidence_score": 0,
+      "is_login_page": false,
+      "login_type": "navigation",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "indusind-duplicate-service",
+    "description": "IndusInd Bank — correct bank but generic homepage instead of specific service",
+    "input": {
+      "provider": "IndusInd Bank",
+      "service_name": "Corporate Net Banking",
+      "url": "https://www.indusind.com/",
+      "page_data": {
+        "title": "IndusInd Bank - Personal Banking, NRI Banking, Corporate Banking",
+        "headings": [
+          "IndusInd Bank",
+          "Personal Banking",
+          "NRI Banking",
+          "Corporate Banking"
+        ],
+        "buttons": [
+          "Login",
+          "Apply Now",
+          "Locate Branch"
+        ],
+        "login_form_present": false,
+        "visible_text": "IndusInd Bank Personal Banking NRI Banking Corporate Banking Savings Account Credit Card Home Loan Personal Loan Fixed Deposit Login Apply Now Locate Branch IndusInd Bank Ltd. Registered Office: Mumbai"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": false,
+      "confidence_score": 45,
+      "url_confidence_score": 85,
+      "is_login_page": false,
+      "login_type": "navigation",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "south-indian-bank-correct",
+    "description": "South Indian Bank SIB Mirror+ — correct match",
+    "input": {
+      "provider": "South Indian Bank",
+      "service_name": "SIB Mirror+",
+      "url": "https://sibmirrorplus.southindianbank.com/",
+      "page_data": {
+        "title": "SIB Mirror+ Internet Banking - South Indian Bank",
+        "headings": [
+          "SIB Mirror+",
+          "Internet Banking"
+        ],
+        "buttons": [
+          "Login",
+          "First Time User",
+          "Forgot Password"
+        ],
+        "login_form_present": true,
+        "visible_text": "SIB Mirror+ Internet Banking South Indian Bank Login User Name Password Login First Time User? Forgot Password? Important: Protect your credentials South Indian Bank Ltd. Head Office: Thrissur, Kerala"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 94,
+      "url_confidence_score": 92,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": true,
+      "category": "customer_login"
+    }
+  },
+  {
+    "id": "indian-bank-staff-portal",
+    "description": "Indian Bank Staff Portal — HRMS, not customer-facing",
+    "input": {
+      "provider": "Indian Bank",
+      "service_name": "Staff Portal",
+      "url": "https://staffportal.indianbank.bank.in/",
+      "page_data": {
+        "title": "",
+        "headings": [],
+        "buttons": [],
+        "login_form_present": true,
+        "visible_text": "STAFF PORTAL PLEASE LOGIN WITH Email/AD USER ID AND PASSWORD Employee ID* AD Password* Please Enter the text as shown in the Image* INDIAN BANK - @2024 - Version : 1.0"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": false,
+      "confidence_score": 20,
+      "url_confidence_score": 60,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": false,
+      "category": "hrms"
+    }
+  },
+  {
+    "id": "idbi-retired-employees-portal",
+    "description": "IDBI Bank Retired Employees Portal — internal, not customer-facing",
+    "input": {
+      "provider": "IDBI Bank",
+      "service_name": "Retired Employees Portal",
+      "url": "https://apps.idbi.bank.in/retired-portal/login.aspx",
+      "page_data": {
+        "title": "IDBI Bank Retired Employees Portal",
+        "headings": [],
+        "buttons": [],
+        "login_form_present": false,
+        "visible_text": "Retired Employees's Portal Employee Code * Date of Birth dd/MM/yyyy"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": false,
+      "confidence_score": 15,
+      "url_confidence_score": 55,
+      "is_login_page": false,
+      "login_type": "navigation",
+      "is_customer_facing": false,
+      "category": "internal_admin"
+    }
+  },
+  {
+    "id": "bobcards-unreachable-placeholder",
+    "description": "BOBCARD login unreachable — DNS failure, placeholder",
+    "input": {
+      "provider": "Bank of Baroda",
+      "service_name": "BOBCARD Login",
+      "url": "https://online.bobcards.com/Login.aspx",
+      "page_data": {
+        "title": null,
+        "headings": null,
+        "buttons": null,
+        "login_form_present": null,
+        "visible_text": null
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": false,
+      "confidence_score": 5,
+      "url_confidence_score": 40,
+      "is_login_page": false,
+      "login_type": "navigation",
+      "is_customer_facing": false,
+      "category": "placeholder"
+    }
+  },
+  {
+    "id": "kotak-neo-marketing",
+    "description": "Kotak Neo trading platform homepage — marketing landing, no login form",
+    "input": {
+      "provider": "Kotak Mahindra Bank",
+      "service_name": "Kotak Neo",
+      "url": "https://www.kotakneo.com/#login",
+      "page_data": {
+        "title": "Kotak Neo: Formerly Kotak Securities",
+        "headings": ["Products", "Platform", "Pricing", "Research", "Market", "Learn"],
+        "buttons": ["Login", "Open Demat Account"],
+        "login_form_present": false,
+        "visible_text": "Products Platform Pricing Research Market Learn Partner Support News IPO Login Open Demat Account Right arrow Kotak Securities Limited"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": true,
+      "confidence_score": 70,
+      "url_confidence_score": 75,
+      "is_login_page": false,
+      "login_type": "navigation",
+      "is_customer_facing": false,
+      "category": "marketing_only"
+    }
+  },
+  {
+    "id": "jpmorgan-employee-login",
+    "description": "J.P. Morgan employee/alternatives login — internal/vendor, not end-customer",
+    "input": {
+      "provider": "J.P. Morgan",
+      "service_name": "Alternatives Login",
+      "url": "https://www.secureaccountview.com/BFWeb/clients/jpmorganalts/index",
+      "page_data": {
+        "title": "J.P. Morgan Alternatives - Log In",
+        "headings": ["J.P. Morgan Alternatives", "CONTACT US"],
+        "buttons": ["Log In"],
+        "login_form_present": true,
+        "visible_text": "Skip to main content J.P. MORGAN ALTERNATIVES CONTACT US J.P. Morgan Alternatives Information Message"
+      }
+    },
+    "expected_output": {
+      "bank_matched": true,
+      "service_matched": false,
+      "confidence_score": 30,
+      "url_confidence_score": 20,
+      "is_login_page": true,
+      "login_type": "direct",
+      "is_customer_facing": false,
+      "category": "vendor_portal"
+    }
+  }
+]

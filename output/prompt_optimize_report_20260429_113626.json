@@ -1,0 +1,20 @@
+{
+  "stages": [
+    {
+      "stage": "matcher",
+      "filename": "service_matcher_expanded.json",
+      "initial_chars": 4619,
+      "initial_lines": 89,
+      "initial_tokens": 1154,
+      "mutations": [],
+      "start_time": 1777384264.855925,
+      "end_time": 1777442786.530193,
+      "elapsed_sec": 58521.67,
+      "final_chars": 1,
+      "final_lines": 2,
+      "final_tokens": 1,
+      "compression_chars": 99.98,
+      "compression_tokens": 99.91
+    }
+  ]
+}

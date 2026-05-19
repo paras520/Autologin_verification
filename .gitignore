@@ -25,3 +25,8 @@ debug*
 # OS
 Thumbs.db
 desktop.ini
+
+# Temporary/scratch scripts
+temp_*.py
+tmp_*.py
+test_sample_*.py

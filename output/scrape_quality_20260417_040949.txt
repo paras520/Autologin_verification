@@ -1,0 +1,28 @@
+=== SCRAPING QUALITY SUMMARY ===
+Total URLs: 297
+Scrape accuracy: 99.3%  (extracted content or correctly identified as unreachable)
+True scrape failures (empty/unknown/hard): 2
+
+Extraction quality:
+  high           264  ( 88.9%)
+  medium          15  (  5.1%)
+  low              0  (  0.0%)
+  empty            2  (  0.7%)
+  unreachable     16  (  5.4%)
+  unknown          0  (  0.0%)
+
+Health status:
+  OK         266
+  INACTIVE   29
+  REDIRECT   2
+
+Attempts distribution:
+  0 attempt(s): 6
+  1 attempt(s): 245
+  2 attempt(s): 36
+HTML fallback used: 5
+Text length median=653 p10=77 max=325551
+
+=== FAILING URLs (2) ===
+  [empty   ] len=   0 https://www.onlinebanking.cub.bank.in/servlet/cb.servlets.CBLoginServlet  extra=200
+  [empty   ] len=   0 https://online.dws.de/  extra=200

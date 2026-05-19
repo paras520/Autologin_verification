@@ -1,18 +1,15 @@
+"""Heuristics for URL verification checks.
 
 LLM-based checks use Langfuse + LiteLLM for intelligent analysis.
 The country-match check is fully deterministic (no LLM call).
 
-Prompt paths are """Heuristics for URL verification checks.
-configurable through environment variables so you can manage
+Prompt paths are configurable through environment variables so you can manage
 and version them in Langfuse independently.
 
 Expected env vars (on top of the shared Langfuse credentials):
-  LANGFUSE_EXTRACTOR_PROMPT      — default: test/autologin_identifier_extractor
-                                   This prompt receives url + bank name + service name
-                                   + all extracted page sections in one call and returns:
-                                   bank_identifiers, relevant_page_sections,
-                                   login_signals, is_login_page, login_type_suggestion
-  LANGFUSE_PROVIDER_MATCH_PROMPT — default: test/autologin_service_matcher
+  LANGFUSE_EXTRACTOR_PROMPT          — default: autologinQA/identifier_extractor
+  LANGFUSE_PROVIDER_MATCH_PROMPT     — default: autologinQA/service_matcher
+  LANGFUSE_CUSTOMER_FACING_PROMPT    — default: autologinQA/customer_facing_classifier
 """
 
 from __future__ import annotations
@@ -29,8 +26,9 @@ except ImportError:
 
 logger = logging.getLogger("autologin.heuristics")
 
-DEFAULT_EXTRACTOR_PROMPT = "test/autologin_identifier_extractor"
-DEFAULT_PROVIDER_MATCH_PROMPT = "test/autologin_service_matcher"
+DEFAULT_EXTRACTOR_PROMPT = "autologinQA/identifier_extractor"
+DEFAULT_PROVIDER_MATCH_PROMPT = "autologinQA/service_matcher"
+DEFAULT_CUSTOMER_FACING_PROMPT = "autologinQA/customer_facing_classifier"
 
 # The cheap extractor LLM receives the full visible text — no cap.
 # It is responsible for extracting only the relevant sections before passing
@@ -138,6 +136,168 @@ def _root_domain(url: str) -> str:
 def _is_shared_host(url: str) -> bool:
     """Return True if the URL's root domain is a known shared/multi-bank host."""
     return _root_domain(url) in _SHARED_HOSTING_DOMAINS
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.5 — Customer-facing audience classifier (LLM)
+# ---------------------------------------------------------------------------
+
+_VALID_AUDIENCE_CATEGORIES: frozenset[str] = frozenset({
+    "customer_login",
+    "hrms",
+    "careers",
+    "internal_admin",
+    "vendor_portal",
+    "marketing_only",
+    "placeholder",
+    "unknown",
+})
+
+
+def _customer_facing_fallback(reason: str, note: str) -> dict:
+    """Fail-open default — never flag a real customer URL as non-customer
+    just because the classifier itself failed.
+    """
+    return {
+        "is_customer_facing": True,
+        "confidence": 0,
+        "category": "unknown",
+        "reason": reason,
+        "notes": [note],
+    }
+
+
+async def classify_customer_facing(
+    provider: str,
+    service_name: str,
+    url: str,
+    page_result: dict,
+    session_id: str = "",
+) -> dict:
+    """LLM-based check that decides whether the page is a customer-facing
+    banking/financial service portal (vs HRMS, careers, internal admin,
+    vendor portal, marketing-only, etc.).
+
+    Runs in Phase 1.5 — after URL health checks, before the extractor/matcher
+    pipeline — so non-customer pages can short-circuit and skip downstream
+    matcher LLM cost.
+
+    Inputs are the same page-data signals the extractor sees: title,
+    headings, buttons, login_form_present, full visible_text — plus the
+    URL itself and the (possibly imprecise) provider/service hints.
+
+    Returns:
+        {
+          "is_customer_facing": bool,
+          "confidence": int (0-100),
+          "category": one of _VALID_AUDIENCE_CATEGORIES,
+          "reason": str,
+          "notes": list[str],
+        }
+
+    On any failure (Langfuse not configured, LLM error, malformed response)
+    a fail-open dict is returned with is_customer_facing=True and
+    confidence=0 — the downstream pipeline only takes destructive action
+    on HIGH confidence non-customer verdicts, so this guarantees no false
+    deletion when the classifier itself is unavailable.
+    """
+    prompt_path = os.getenv("LANGFUSE_CUSTOMER_FACING_PROMPT", DEFAULT_CUSTOMER_FACING_PROMPT)
+
+    if not _langfuse_is_configured():
+        msg = "[customer-facing] Langfuse not configured — skipping classifier (fail-open)"
+        logger.warning(msg)
+        print(f"WARNING: {msg}")
+        return _customer_facing_fallback(
+            reason="classifier skipped: Langfuse credentials missing",
+            note="customer_facing skipped — Langfuse credentials missing",
+        )
+
+    cb_link_id = session_id
+    inner_session_id = f"{session_id}-customer_facing" if session_id else "customer_facing"
+
+    # 6 000-char cap: the classifier only needs to identify page type, not read
+    # the entire document. The extractor (no-cap) handles deep content scanning.
+    visible_text = _normalize_text(page_result.get("visible_text"))[:6_000]
+
+    variables = {
+        "provider": provider or "",
+        "service_name": service_name or "",
+        "url": url or "",
+        "page_title": _normalize_text(page_result.get("title")),
+        "headings": json.dumps(page_result.get("headings") or [], ensure_ascii=False),
+        "buttons": json.dumps(page_result.get("buttons") or [], ensure_ascii=False),
+        "login_form_present": str(page_result.get("login_form_present", False)).lower(),
+        "visible_text": visible_text,
+    }
+
+    try:
+        build_messages, call_litellm, get_prompts_from_langfuse, parse_response = (
+            _load_langfuse_helpers()
+        )
+
+        system_prompt, user_prompt, config, prompt_obj = get_prompts_from_langfuse(
+            prompt_path=prompt_path,
+            session_id=inner_session_id,
+            variables=variables,
+        )
+
+        messages = build_messages(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        response = await call_litellm(
+            config=config,
+            messages=messages,
+            session_id=inner_session_id,
+            api_endpoint="/check/customer_facing",
+            tag_suffix="customer_facing",
+            extra_tags=[cb_link_id] if cb_link_id else [],
+            prompt=prompt_obj,
+        )
+
+        parsed = parse_response(response, has_functions=False, has_tools=False)
+
+        if not isinstance(parsed, dict):
+            msg = f"[customer-facing] LLM returned unstructured response: {str(parsed)[:300]}"
+            logger.warning(msg)
+            print(f"WARNING: {msg}")
+            return _customer_facing_fallback(
+                reason="classifier returned unstructured response",
+                note=f"customer_facing unstructured response: {str(parsed)[:200]}",
+            )
+
+        is_customer_facing = bool(parsed.get("is_customer_facing", True))
+        try:
+            confidence = int(parsed.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0
+        confidence = max(0, min(100, confidence))
+
+        category_raw = str(parsed.get("category", "unknown")).strip().lower()
+        category = category_raw if category_raw in _VALID_AUDIENCE_CATEGORIES else "unknown"
+
+        reason = str(parsed.get("reason", "")).strip() or "no reason given"
+
+        result = {
+            "is_customer_facing": is_customer_facing,
+            "confidence": confidence,
+            "category": category,
+            "reason": reason,
+            "notes": [f"langfuse_session_id={inner_session_id}"],
+        }
+
+        logger.info(
+            "[customer-facing] is_customer_facing=%s  confidence=%d  category=%s",
+            result["is_customer_facing"], result["confidence"], result["category"],
+        )
+        return result
+
+    except Exception as exc:
+        msg = f"[customer-facing] LLM call failed: {exc}"
+        logger.error(msg, exc_info=True)
+        print(f"ERROR: {msg}")
+        return _customer_facing_fallback(
+            reason=f"classifier error: {exc}",
+            note=f"customer_facing_llm_error={exc}",
+        )
 
 
 async def extract_and_score(
@@ -325,8 +485,8 @@ async def assess_match_with_identifiers(
     _SKIP = {
         "bank_matched": True,
         "service_matched": True,
-        "confidence_score": 0,
-        "url_confidence_score": 0,
+        "confidence_score": None,
+        "url_confidence_score": None,
         "login_type": extractor_result.get("login_type_suggestion", "direct"),
         "reason": "Match check skipped.",
         "notes": [],
@@ -390,8 +550,14 @@ async def assess_match_with_identifiers(
         if isinstance(parsed, dict):
             bank_matched = bool(parsed.get("bank_matched", False))
             service_matched = bool(parsed.get("service_matched", False))
-            confidence_score = max(0, min(int(parsed.get("confidence_score", 0)), 100))
-            url_confidence_score = max(0, min(int(parsed.get("url_confidence_score", 0)), 100))
+            try:
+                confidence_score = max(0, min(int(parsed.get("confidence_score") or 0), 100))
+            except (TypeError, ValueError):
+                confidence_score = 0
+            try:
+                url_confidence_score = max(0, min(int(parsed.get("url_confidence_score") or 0), 100))
+            except (TypeError, ValueError):
+                url_confidence_score = 0
             login_type_raw = str(parsed.get("login_type", extractor_result.get("login_type_suggestion", "direct"))).strip().lower()
             login_type = login_type_raw if login_type_raw in ("direct", "navigation") else "direct"
             reason = parsed.get("reason") or (
@@ -460,11 +626,7 @@ async def assess_full_match(
 
     result = await assess_match_with_identifiers(provider, service_name, url, extractor_result, session_id=session_id)
 
-    result["notes"] = (
-        [f"url_confidence_score={result.get('url_confidence_score', 0)}"]
-        + result.get("notes", [])
-        + extractor_result.get("notes", [])
-    )
+    result["notes"] = result.get("notes", []) + extractor_result.get("notes", [])
 
     return result
 

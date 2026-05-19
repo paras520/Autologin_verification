@@ -1,0 +1,20 @@
+{
+  "stages": [
+    {
+      "stage": "extractor",
+      "filename": "identifier_extractor_expanded.json",
+      "initial_chars": 3720,
+      "initial_lines": 57,
+      "initial_tokens": 930,
+      "mutations": [],
+      "start_time": 1777382515.4911616,
+      "end_time": 1777384259.852711,
+      "elapsed_sec": 1744.36,
+      "final_chars": 1,
+      "final_lines": 2,
+      "final_tokens": 1,
+      "compression_chars": 99.97,
+      "compression_tokens": 99.89
+    }
+  ]
+}

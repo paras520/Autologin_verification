@@ -1,0 +1,17 @@
+.git/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.deepeval/
+output/
+docs/
+tests/
+scripts/
+temporal/
+temporal_skills/
+prompts/
+*.md
+.claude/

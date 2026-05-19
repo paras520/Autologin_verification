@@ -1,0 +1,35 @@
+=== SCRAPING QUALITY SUMMARY ===
+Total URLs: 297
+Scrape accuracy: 98.0%  (extracted content or correctly identified as unreachable)
+True scrape failures (empty/unknown/hard): 6
+
+Extraction quality:
+  high           252  ( 84.8%)
+  medium          23  (  7.7%)
+  low              3  (  1.0%)
+  empty            2  (  0.7%)
+  unreachable     13  (  4.4%)
+  unknown          0  (  0.0%)
+
+Health status:
+  OK         265
+  INACTIVE   26
+  REDIRECT   2
+
+Attempts distribution:
+  0 attempt(s): 2
+  1 attempt(s): 244
+  2 attempt(s): 36
+HTML fallback used: 5
+Text length median=570 p10=45 max=325551
+
+=== FAILING URLs (9) ===
+  [ERROR   ] len=   0 https://netportal.hdfcbank.com/login  extra=timeout
+  [low     ] len=   9 https://bobcrm.bankofbaroda.bank.in/dsaportal/login.aspx  extra=200
+  [ERROR   ] len=   0 https://yesbusiness.yes.bank.in/  extra=timeout
+  [ERROR   ] len=   0 https://yesconnect.yes.bank.in/  extra=timeout
+  [ERROR   ] len=   0 https://yessmartpay.yes.bank.in/pay/web/login/index  extra=timeout
+  [low     ] len=  19 https://reports.jkb.bank.in/  extra=200
+  [empty   ] len=   0 https://www.onlinebanking.cub.bank.in/servlet/cb.servlets.CBLoginServlet  extra=200
+  [empty   ] len=   0 https://online.dws.de/  extra=200
+  [low     ] len=  12 https://secure.chase.com/web/auth/?treatment=jpo#/logon/logon/chaseOnline  extra=200

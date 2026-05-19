@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\user\\\\Documents\\\\repos\\\\m114-link-mgmt-batch-portal\" -Recurse -File | Where-Object {$_.Extension -in '.json', '.md', '.tsx', '.ts', '.js'} | Select-Object -First 30 | Format-Table Name, @{Label='RelativePath'; Expression={$_.FullName -replace [regex]::Escape\\(\"c:\\\\Users\\\\user\\\\Documents\\\\repos\\\\m114-link-mgmt-batch-portal\"\\), ''}} -AutoSize)",
+      "PowerShell(tasklist /fi \"PID eq 6640\")",
+      "PowerShell(taskkill /PID 6640 /F)",
+      "PowerShell(tasklist /fi \"PID eq 6640\" 2>$null)",
+      "PowerShell(netstat -ano)",
+      "PowerShell(docker exec -it m103-backend-local npx prisma migrate resolve --rolled-back 20260422120000_create_auto_url_report_views)",
+      "PowerShell(docker exec m103-backend-local npx prisma migrate resolve --rolled-back 20260422120000_create_auto_url_report_views)",
+      "PowerShell(docker exec m103-backend-local npx prisma migrate deploy)",
+      "Bash(findstr /v \"KEY\\\\|SECRET\\\\|PASSWORD\\\\|PASS\\\\|TOKEN\\\\|API\")",
+      "Bash(findstr /i \"DATABASE_URL M103 BASE_URL TEMPORAL\")",
+      "Bash(cd /c/Users/user/Documents/repos/m103_whitelist_management && find . -name \".env*\" -o -name \"*.env\" | head -5)",
+      "Read(//c/c/Users/user/Documents/repos/**)",
+      "Bash(docker system *)",
+      "Bash(Select-Object -First 60)",
+      "Bash(python scripts/cancel_all_workflows.py)",
+      "Bash(python -m scripts.cancel_all_workflows)",
+      "Bash(docker exec *)",
+      "Bash(docker compose *)",
+      "Bash(docker stop *)",
+      "Bash(docker rm *)",
+      "Bash(docker restart *)",
+      "Bash(curl -s http://localhost:8001/whitelistautologin/health)",
+      "Bash(curl -s http://localhost:3000 -o /dev/null -w \"%{http_code}\")",
+      "Bash(npx tsc *)"
+    ],
+    "defaultMode": "acceptEdits",
+    "allowedTools": [
+      "Read",
+      "Write",
+      "Edit",
+      "Bash(git:*)",
+      "Bash(npm:*)",
+      "Bash(pnpm:*)"
+    ]
+  }
+}

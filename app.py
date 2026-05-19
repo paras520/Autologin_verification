@@ -19,6 +19,7 @@ if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from src.routers.verification_router import router as verification_router  # noqa: E402
 from src.utils.logging_utils import configure_logging  # noqa: E402
@@ -27,6 +28,14 @@ configure_logging()
 
 
 app = FastAPI(title="URL Verification API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(verification_router)
 
 

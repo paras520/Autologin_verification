@@ -1,0 +1,20 @@
+{
+  "stages": [
+    {
+      "stage": "classifier",
+      "filename": "customer_facing_classifier_expanded.json",
+      "initial_chars": 4882,
+      "initial_lines": 74,
+      "initial_tokens": 1220,
+      "mutations": [],
+      "start_time": 1777442793.3999903,
+      "end_time": 1777443800.8226094,
+      "elapsed_sec": 1007.42,
+      "final_chars": 1,
+      "final_lines": 2,
+      "final_tokens": 1,
+      "compression_chars": 99.98,
+      "compression_tokens": 99.92
+    }
+  ]
+}

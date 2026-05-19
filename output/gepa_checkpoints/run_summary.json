@@ -1,0 +1,10 @@
+{
+  "start": "2026-04-28T18:51:51.785491",
+  "stages": {
+    "extractor": "ok",
+    "matcher": "ok",
+    "classifier": "ok"
+  },
+  "elapsed_minutes": 1021.5,
+  "end": "2026-04-29T11:53:21.288728"
+}

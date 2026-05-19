@@ -1,0 +1,25 @@
+Pipeline checkpoints run at 20260417_141737
+Targets:        8
+Concurrency:    3
+Output dir:     C:\Users\user\Documents\repos\autologin_verification\output\checkpoints_20260417_141737
+
+Exit phase distribution:
+  1_health                 1
+  4_final                  7
+
+Per-phase error counts (0 means working):
+  phase1_health            0
+  phase1.5_audience        0
+  phase2a_extractor        0
+  phase2b_matcher          0
+  phase3_country           0
+
+Total errors across all phases: 0
+
+Files written:
+  01_health.jsonl           8 records  24471 bytes
+  02_audience.jsonl         7 records  8608 bytes
+  03_extractor.jsonl        7 records  17125 bytes
+  04_matcher.jsonl          7 records  4411 bytes
+  05_country.jsonl          7 records  2503 bytes
+  06_final.jsonl            8 records  3326 bytes

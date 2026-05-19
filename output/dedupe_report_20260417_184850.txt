@@ -1,0 +1,34 @@
+======================================================================
+DEDUPE REPORT  (Phase 1 only - Cases 1 + 3)
+======================================================================
+cb_link_ids scanned:      64
+rows scanned:             328
+rows kept:                325
+rows flagged delete_url:  3
+Case 1 groups total:      0  (same name, same URL)
+Case 3 groups total:      2  (diff names, same URL)
+
+----------------------------------------------------------------------
+Groups that triggered Case 1 or Case 3:
+----------------------------------------------------------------------
+  [case_3] cb_link_id=B-IN-SORltG  size=3
+      url:    https://bobibanking.bankofbaroda.bank.in/
+      names:  ['bob World Internet (Corporate)', 'bob World Internet (Retail Banking)', 'bob World Internet (Retail)']
+      canonical_display_name -> 'World Internet Retail Banking'
+      survivor_id: 0d4195f4-7301-4c6b-a9dd-39608e2c33b2
+
+  [case_3] cb_link_id=B-IN-i9i6wf  size=2
+      url:    https://s2b.standardchartered.com/unifiedlogin/login/index.html
+      names:  ['Straight2Bank', 'Straight2Bank (Corporate Banking)']
+      canonical_display_name -> 'Straight2Bank Corporate'
+      survivor_id: d278717b-6121-4268-894a-c3c4ee7a18e2
+
+
+----------------------------------------------------------------------
+Phase 2 smoke (Case 2 — same name, different URLs):
+----------------------------------------------------------------------
+  id=row-a  action=keep  dup_of=None  score=90  health=True
+  id=row-b  action=delete_same_name_worse  dup_of=row-a  score=30  health=True
+  id=row-c  action=delete_same_name_worse  dup_of=row-a  score=None  health=False
+
+  [OK] Phase 2 smoke assertions passed
