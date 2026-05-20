@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "lastUpdated": null,
+  "systemTracking": {
+    "registryCreated": null,
+    "lastRegistryUpdate": null,
+    "filesReadSuccessfully": [],
+    "filesReadFailed": [],
+    "totalUpdates": 0
+  },
+  "implementations": {
+    "workflows": [],
+    "activities": [],
+    "workers": [],
+    "clients": []
+  },
+  "files": {
+    "workflowFiles": [],
+    "activityFiles": [],
+    "workerFiles": [],
+    "clientFiles": [],
+    "configFiles": []
+  },
+  "statistics": {
+    "totalWorkflows": 0,
+    "totalActivities": 0,
+    "totalWorkers": 0,
+    "totalClients": 0,
+    "languages": {},
+    "taskQueues": []
+  },
+  "metadata": {
+    "projectLanguage": null,
+    "temporalNamespace": null,
+    "temporalUri": null,
+    "firstImplementation": null,
+    "lastImplementation": null
+  }
+}

@@ -1,0 +1,458 @@
+# Temporal Platform Overview
+
+## What is Temporal?
+
+Temporal is a durable execution platform that guarantees your application code runs to completion, even in the face of failures. It provides a programming model for building reliable, scalable distributed systems.
+
+Platform Version: Temporal Server 1.23+, SDKs as specified per language
+
+## Core Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Temporal Client                          │
+│            (Start/Signal/Query Workflows)                    │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Temporal Service                            │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │   Frontend   │  │   History    │  │   Matching   │     │
+│  │   Service    │  │   Service    │  │   Service    │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+│                                                              │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │         Persistence Layer (Database)                  │  │
+│  └──────────────────────────────────────────────────────┘  │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Workers                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │  Workflow    │  │  Activity    │  │  Activity    │     │
+│  │  Executor    │  │  Executor    │  │  Executor    │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Core Concepts
+
+### 1. Workflows
+**What**: The orchestration logic that coordinates activities
+**Characteristics**:
+- Durable - survives process crashes
+- Deterministic - must produce same result when replayed
+- Long-running - can run for seconds to years
+- Versioned - supports safe updates
+
+**When to Use**:
+- Multi-step business processes
+- Orchestrating multiple services
+- Managing state over time
+- Requiring reliability guarantees
+
+### 2. Activities
+**What**: Individual units of work (tasks)
+**Characteristics**:
+- Can fail and retry automatically
+- Can be non-deterministic (API calls, DB queries)
+- Timeout-based execution
+- Idempotent by design
+
+**When to Use**:
+- External API calls
+- Database operations
+- File I/O operations
+- Any side effect
+
+### 3. Workers
+**What**: Services that execute workflow and activity code
+**Characteristics**:
+- Poll task queues for work
+- Execute workflow and activity code
+- Stateless - can be scaled horizontally
+- Can be deployed anywhere
+
+**When to Use**:
+- Always needed - workers run your code
+- Scale based on workload
+- Deploy per task queue
+
+### 4. Task Queues
+**What**: Named queues that route tasks to workers
+**Characteristics**:
+- Durable message delivery
+- Load balancing across workers
+- Support for worker pools
+- Rate limiting capabilities
+
+**When to Use**:
+- Organizing work by type
+- Isolating resource-intensive tasks
+- Routing to specialized workers
+
+## Temporal Services Catalog
+
+### Service Types by Use Case
+
+#### 1. **Background Job Processing**
+Replace: Redis Queue, Celery, Sidekiq, Bull
+**Temporal Approach**: Workflows for job orchestration, Activities for job execution
+**Benefits**: Built-in retries, visibility, durability
+
+#### 2. **Scheduled/Cron Jobs**
+Replace: Cron, AWS EventBridge, Kubernetes CronJobs
+**Temporal Approach**: Cron Workflows with schedule syntax
+**Benefits**: Visibility, failure handling, dynamic scheduling
+
+#### 3. **Distributed Transactions (Saga Pattern)**
+Replace: Manual compensation logic, Two-phase commit
+**Temporal Approach**: Workflows with compensation activities
+**Benefits**: Automatic rollback, visibility, testability
+
+#### 4. **Microservice Orchestration**
+Replace: Step Functions, Airflow, Custom orchestrators
+**Temporal Approach**: Workflows coordinating service activities
+**Benefits**: Fault tolerance, versioning, observability
+
+#### 5. **Event-Driven Processing**
+Replace: Kafka consumers, Event handlers
+**Temporal Approach**: Workflows triggered by events, signals for updates
+**Benefits**: Stateful processing, exactly-once semantics
+
+#### 6. **Long-Running Operations**
+Replace: Manual state tracking in databases
+**Temporal Approach**: Long-running workflows with signals/queries
+**Benefits**: Durable state, easy queries, automatic recovery
+
+#### 7. **Human-in-the-Loop Processes**
+Replace: Custom approval systems
+**Temporal Approach**: Workflows with signal-based approvals
+**Benefits**: Timeout handling, escalation, audit trail
+
+#### 8. **Data Pipelines**
+Replace: Airflow, Luigi, Custom ETL
+**Temporal Approach**: Workflows for pipeline orchestration
+**Benefits**: Partial retry, visibility, complex dependencies
+
+#### 9. **File Processing**
+Replace: AWS Lambda chains, Custom processors
+**Temporal Approach**: Workflows for file lifecycle management
+**Benefits**: Tracking, retries, parallel processing
+
+#### 10. **Rate-Limited Operations**
+Replace: Manual rate limiting logic
+**Temporal Approach**: Workflows with controlled activity execution
+**Benefits**: Built-in rate limiting, backpressure
+
+## SDK Language Support
+
+**IMPORTANT FOR CURSOR AI:** This section contains minimum SDK version requirements. Cursor MUST read these versions dynamically and check installed versions against these minimums. Never hardcode versions - always read from this file.
+
+### Officially Supported SDKs
+
+#### **Go SDK**
+- **Package**: `go.temporal.io/sdk` v1.25.0+ (MINIMUM REQUIRED)
+- **Best For**: High-performance services, systems programming
+- **Maturity**: Production-ready, feature complete
+- **Latest Features**: Nexus support, Updates API, enhanced metrics
+- **Version Check**: Compare installed version in `go.mod` with v1.25.0+
+
+#### **Java SDK**
+- **Package**: `io.temporal:temporal-sdk` v1.23.0+ (MINIMUM REQUIRED)
+- **Best For**: Enterprise applications, Spring Boot integration
+- **Maturity**: Production-ready, feature complete
+- **Latest Features**: Updates API, improved Spring integration, Nexus operations
+- **Version Check**: Compare installed version in `pom.xml` or `build.gradle` with 1.23.0+
+
+#### **Python SDK**
+- **Package**: `temporalio` v1.5.0+ (MINIMUM REQUIRED)
+- **Best For**: Data pipelines, ML workflows, rapid development
+- **Maturity**: Production-ready, growing ecosystem
+- **Latest Features**: Updates API, async improvements, better type hints
+- **Version Check**: Compare installed version in `requirements.txt` or `pyproject.toml` with 1.5.0+
+
+#### **TypeScript SDK**
+- **Package**: `@temporalio/client`, `@temporalio/worker`, `@temporalio/workflow` v1.10.0+ (MINIMUM REQUIRED)
+- **Best For**: Node.js applications, full-stack JavaScript
+- **Maturity**: Production-ready, excellent DX
+- **Latest Features**: Updates API, Nexus support, improved bundling
+- **Version Check**: Compare installed versions in `package.json` with 1.10.0+
+
+#### **.NET SDK**
+- **Package**: `Temporalio` v1.1.0+ (MINIMUM REQUIRED)
+- **Best For**: C# applications, Azure integration
+- **Maturity**: Production-ready
+- **Latest Features**: Updates API, async/await improvements
+- **Version Check**: Compare installed version in `.csproj` with 1.1.0+
+
+#### **PHP SDK**
+- **Package**: `temporal/sdk` v2.10.0+ (MINIMUM REQUIRED)
+- **Best For**: Web applications, legacy PHP systems
+- **Maturity**: Production-ready
+- **Latest Features**: PHP 8.2+ support, improved RoadRunner integration
+- **Version Check**: Compare installed version in `composer.json` with 2.10.0+
+
+#### **Ruby SDK**
+- **Package**: `temporalio` v0.1.0+ (MINIMUM REQUIRED - Preview)
+- **Best For**: Rails applications, Ruby services
+- **Maturity**: Preview/Beta
+- **Latest Features**: Basic workflow and activity support
+- **Version Check**: Compare installed version in `Gemfile` with 0.1.0+
+
+**Version Validation Instructions for Cursor:**
+1. Read minimum versions from this section (dynamic, not hardcoded)
+2. Detect installed versions from package files (package.json, requirements.txt, go.mod, etc.)
+3. Compare installed vs minimum required
+4. If outdated: Include in validation feedback with update command
+5. If missing: Include in validation feedback with install command
+6. Version alerts appear in Cursor chat when validation runs (see validation protocol)
+
+## Deployment Options
+
+### 1. Temporal Cloud (Recommended for Production)
+**What**: Fully managed Temporal service
+**Benefits**:
+- No infrastructure management
+- High availability built-in
+- Automatic scaling
+- Multi-region support
+- Enterprise security
+
+**When to Use**:
+- Production applications
+- Teams without ops expertise
+- Need for 99.99% uptime
+
+**Connection**:
+```
+Host: <namespace>.tmprl.cloud:7233
+Namespace: <your-namespace>
+Authentication: API Key + mTLS
+```
+
+### 2. Self-Hosted Temporal
+**What**: Run Temporal on your infrastructure
+**Benefits**:
+- Full control
+- Cost optimization
+- On-premises deployment
+- Customization options
+
+**When to Use**:
+- Specific compliance requirements
+- Existing infrastructure
+- Cost sensitive at scale
+
+**Requirements**:
+- Database (PostgreSQL, MySQL, Cassandra)
+- Container orchestration (Kubernetes, Docker)
+- Monitoring stack
+- Operational expertise
+
+### 3. Local Development Server
+**What**: Lightweight Temporal for development
+**Benefits**:
+- Quick setup
+- No external dependencies
+- Perfect for testing
+
+**When to Use**:
+- Local development
+- Unit/integration testing
+- Learning Temporal
+
+**Setup**:
+```bash
+temporal server start-dev
+```
+
+## Key Features & Capabilities
+
+### 1. Automatic Retry Policies
+- Configurable retry behavior per activity
+- Exponential backoff
+- Maximum attempts
+- Non-retryable error types
+
+### 2. Timeouts
+- **Schedule-to-Close**: Total time for activity
+- **Start-to-Close**: Time from start to completion
+- **Schedule-to-Start**: Time in queue before execution
+- **Heartbeat**: Timeout for long-running activities
+
+### 3. Versioning
+- Safe workflow code updates
+- No downtime deployments
+- Backward compatibility
+- Gradual rollout support
+
+### 4. Signals & Queries
+- **Signals**: External events to running workflows
+- **Queries**: Synchronous state inspection
+- **Updates**: Signal with response
+
+### 5. Child Workflows
+- Compose workflows hierarchically
+- Isolate failure domains
+- Reusable workflow components
+
+### 6. Continue-As-New
+- Handle infinite or very long workflows
+- Reset workflow history
+- Memory optimization
+
+### 7. Observability
+- Complete execution history
+- Event timeline
+- Metrics export
+- Distributed tracing support
+
+## Data Flow
+
+```
+1. Client starts workflow
+         ↓
+2. Temporal Service persists workflow
+         ↓
+3. Worker polls for workflow task
+         ↓
+4. Worker executes workflow code
+         ↓
+5. Workflow schedules activities
+         ↓
+6. Worker polls for activity tasks
+         ↓
+7. Worker executes activities
+         ↓
+8. Results returned to workflow
+         ↓
+9. Workflow completes
+         ↓
+10. Result returned to client
+```
+
+## Benefits Over Alternatives
+
+### vs. Message Queues (RabbitMQ, SQS, Kafka)
+✅ Built-in orchestration
+✅ Automatic state management
+✅ Exactly-once semantics
+✅ Complex workflows support
+✅ Visibility & debugging
+
+### vs. Step Functions / Airflow
+✅ Code-first (no JSON/YAML)
+✅ Better testing story
+✅ Unlimited workflow complexity
+✅ No vendor lock-in
+✅ Self-hostable
+
+### vs. Manual State Machines
+✅ No custom database schema
+✅ Automatic failure recovery
+✅ Time-travel debugging
+✅ Built-in observability
+✅ Less code to maintain
+
+## Common Patterns
+
+### 1. Request-Response
+Simple workflow that calls an activity and returns result
+
+### 2. Fan-Out/Fan-In
+Parallel execution of activities, wait for all results
+
+### 3. Saga Pattern
+Distributed transaction with compensation
+
+### 4. Actor Pattern
+Long-lived workflow responding to signals
+
+### 5. Polling Pattern
+Workflow that periodically checks external state
+
+### 6. Human-in-the-Loop
+Workflow waiting for human approval
+
+### 7. Rate Limiting
+Controlled execution with rate limits
+
+### 8. Batching
+Collect items and process in batches
+
+## Getting Started Checklist
+
+- [ ] Choose your language SDK
+- [ ] Set up local Temporal server
+- [ ] Define your first workflow
+- [ ] Implement activities
+- [ ] Create worker
+- [ ] Write client code to start workflow
+- [ ] Add error handling
+- [ ] Implement tests
+- [ ] Add monitoring
+- [ ] Plan production deployment
+
+## Resource Requirements
+
+### Local Development
+- CPU: 2+ cores
+- RAM: 4GB+
+- Disk: 10GB+
+
+### Production (Self-Hosted)
+- Frontend: 2+ instances (2 CPU, 4GB RAM each)
+- History: 4+ instances (4 CPU, 8GB RAM each)
+- Matching: 2+ instances (2 CPU, 4GB RAM each)
+- Worker: Based on workload (scale horizontally)
+- Database: Highly available PostgreSQL/Cassandra
+
+### Temporal Cloud
+- No infrastructure needed
+- Pay per action executed
+- Automatic scaling
+
+## Security Model
+
+### Authentication
+- mTLS for service-to-service
+- API keys for Temporal Cloud
+- OAuth integration support
+
+### Authorization
+- Namespace isolation
+- Task queue permissions
+- Role-based access control
+
+### Encryption
+- TLS in transit
+- Data encryption at rest
+- Payload encryption (custom codecs)
+
+## Performance Characteristics
+
+### Throughput
+- 1000s of workflow starts/second
+- 10,000s of activity executions/second
+- Scales horizontally
+
+### Latency
+- Workflow start: <100ms
+- Activity scheduling: <10ms
+- Signal delivery: <100ms
+
+### Durability
+- 99.99%+ availability (Temporal Cloud)
+- No data loss guarantees
+- Automatic failover
+
+## Next Steps
+
+→ See `temporal-workflows.mdc` for workflow implementation patterns
+→ See `temporal-activities.mdc` for activity best practices
+→ See `temporal-use-cases.mdc` for specific use case implementations
+→ See `temporal-language-examples.mdc` for code in your language
+

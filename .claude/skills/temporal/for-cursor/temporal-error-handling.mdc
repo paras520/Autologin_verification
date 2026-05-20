@@ -1,0 +1,864 @@
+# Temporal Error Handling - Complete Guide
+
+**
+
+## Error Handling Philosophy
+
+Temporal provides sophisticated error handling at multiple levels. Understanding these mechanisms is crucial for building reliable applications. This guide reflects 2026 best practices and SDK improvements.
+
+## Error Hierarchy
+
+```
+┌─────────────────────────────────────────┐
+│         Application Errors              │
+│  (Business logic, validation)           │
+└─────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────┐
+│      Activity-Level Errors              │
+│  (Retryable vs Non-Retryable)           │
+└─────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────┐
+│      Workflow-Level Errors              │
+│  (Compensation, error propagation)      │
+└─────────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────────┐
+│      System-Level Errors                │
+│  (Timeouts, infrastructure)             │
+└─────────────────────────────────────────┘
+```
+
+## Activity Error Handling
+
+### 1. Retryable vs Non-Retryable Errors
+
+**TypeScript**:
+
+```typescript
+import { ApplicationFailure } from '@temporalio/activity';
+
+export async function processPayment(amount: number, customerId: string): Promise<PaymentResult> {
+  try {
+    const customer = await getCustomer(customerId);
+    
+    // Validation error - should NOT retry
+    if (amount <= 0) {
+      throw ApplicationFailure.nonRetryable(
+        'Invalid payment amount',
+        'ValidationError',
+        { amount }
+      );
+    }
+    
+    // Customer not found - should NOT retry
+    if (!customer) {
+      throw ApplicationFailure.nonRetryable(
+        'Customer not found',
+        'NotFoundError',
+        { customerId }
+      );
+    }
+    
+    // Process payment
+    const result = await paymentGateway.charge(customer, amount);
+    
+    return result;
+    
+  } catch (error) {
+    // Network error - SHOULD retry
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+      throw ApplicationFailure.retryable(
+        'Payment gateway unavailable',
+        'NetworkError'
+      );
+    }
+    
+    // Rate limit - SHOULD retry with backoff
+    if (error.code === 'RATE_LIMIT') {
+      throw ApplicationFailure.retryable(
+        'Rate limited by payment gateway',
+        'RateLimitError'
+      );
+    }
+    
+    // Card declined - should NOT retry
+    if (error.code === 'CARD_DECLINED') {
+      throw ApplicationFailure.nonRetryable(
+        'Payment declined',
+        'PaymentDeclined',
+        { reason: error.message }
+      );
+    }
+    
+    // Unknown errors are retryable by default
+    throw error;
+  }
+}
+```
+
+**Python**:
+
+```python
+from temporalio import activity
+from temporalio.exceptions import ApplicationError
+
+@activity.defn
+async def process_payment(amount: float, customer_id: str) -> dict:
+    try:
+        customer = await get_customer(customer_id)
+        
+        # Validation error - should NOT retry
+        if amount <= 0:
+            raise ApplicationError(
+                "Invalid payment amount",
+                type="ValidationError",
+                non_retryable=True,
+                details={"amount": amount}
+            )
+        
+        # Customer not found - should NOT retry
+        if not customer:
+            raise ApplicationError(
+                "Customer not found",
+                type="NotFoundError",
+                non_retryable=True,
+                details={"customer_id": customer_id}
+            )
+        
+        # Process payment
+        result = await payment_gateway.charge(customer, amount)
+        return result
+        
+    except NetworkError as e:
+        # Network error - SHOULD retry
+        raise ApplicationError(
+            "Payment gateway unavailable",
+            type="NetworkError",
+            non_retryable=False
+        )
+    
+    except RateLimitError as e:
+        # Rate limit - SHOULD retry
+        raise ApplicationError(
+            "Rate limited by payment gateway",
+            type="RateLimitError",
+            non_retryable=False
+        )
+    
+    except CardDeclinedError as e:
+        # Card declined - should NOT retry
+        raise ApplicationError(
+            "Payment declined",
+            type="PaymentDeclined",
+            non_retryable=True,
+            details={"reason": str(e)}
+        )
+```
+
+**Go**:
+
+```go
+import (
+    "go.temporal.io/sdk/temporal"
+    "go.temporal.io/sdk/activity"
+)
+
+func ProcessPayment(ctx context.Context, amount float64, customerID string) (PaymentResult, error) {
+    logger := activity.GetLogger(ctx)
+    
+    customer, err := getCustomer(customerID)
+    
+    // Validation error - should NOT retry
+    if amount <= 0 {
+        return PaymentResult{}, temporal.NewNonRetryableApplicationError(
+            "Invalid payment amount",
+            "ValidationError",
+            nil,
+            map[string]interface{}{"amount": amount},
+        )
+    }
+    
+    // Customer not found - should NOT retry
+    if customer == nil {
+        return PaymentResult{}, temporal.NewNonRetryableApplicationError(
+            "Customer not found",
+            "NotFoundError",
+            nil,
+            map[string]interface{}{"customerId": customerID},
+        )
+    }
+    
+    // Process payment
+    result, err := paymentGateway.Charge(customer, amount)
+    if err != nil {
+        // Network error - SHOULD retry
+        if isNetworkError(err) {
+            return PaymentResult{}, temporal.NewApplicationError(
+                "Payment gateway unavailable",
+                "NetworkError",
+            )
+        }
+        
+        // Card declined - should NOT retry
+        if isCardDeclined(err) {
+            return PaymentResult{}, temporal.NewNonRetryableApplicationError(
+                "Payment declined",
+                "PaymentDeclined",
+                err,
+                nil,
+            )
+        }
+        
+        // Unknown errors are retryable by default
+        return PaymentResult{}, err
+    }
+    
+    return result, nil
+}
+```
+
+### 2. Retry Policies
+
+**Comprehensive Retry Configuration**:
+
+```typescript
+// TypeScript Example
+const activities = proxyActivities<typeof myActivities>({
+  startToCloseTimeout: '5 minutes',
+  retry: {
+    // Initial retry delay
+    initialInterval: '1s',
+    
+    // Multiplier for exponential backoff
+    backoffCoefficient: 2.0,
+    
+    // Maximum retry attempts (0 = unlimited)
+    maximumAttempts: 5,
+    
+    // Maximum delay between retries
+    maximumInterval: '60s',
+    
+    // Errors that should NOT trigger retries
+    nonRetryableErrorTypes: [
+      'ValidationError',
+      'NotFoundError',
+      'Unauthorized',
+      'PaymentDeclined',
+    ],
+  },
+});
+```
+
+**Retry Timeline Example**:
+
+```
+Attempt 1: Execute immediately
+Failure → Wait 1s
+Attempt 2: Execute after 1s
+Failure → Wait 2s (1s * 2^1)
+Attempt 3: Execute after 2s
+Failure → Wait 4s (1s * 2^2)
+Attempt 4: Execute after 4s
+Failure → Wait 8s (1s * 2^3)
+Attempt 5: Execute after 8s
+Failure → Workflow fails
+```
+
+### 3. Custom Retry Strategies
+
+```typescript
+// TypeScript Example - Per-activity retry policies
+export async function robustWorkflow(): Promise<void> {
+  // Critical activity - aggressive retries
+  const { criticalActivity } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '2 minutes',
+    retry: {
+      initialInterval: '500ms',
+      backoffCoefficient: 1.5,
+      maximumAttempts: 10,
+      maximumInterval: '10s',
+    },
+  });
+  
+  // Non-critical activity - fewer retries
+  const { nonCriticalActivity } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '1 minute',
+    retry: {
+      initialInterval: '2s',
+      backoffCoefficient: 2,
+      maximumAttempts: 3,
+      maximumInterval: '30s',
+    },
+  });
+  
+  await criticalActivity();
+  await nonCriticalActivity();
+}
+```
+
+## Workflow Error Handling
+
+### 1. Try-Catch in Workflows
+
+```typescript
+// TypeScript Example
+export async function orderProcessingWorkflow(orderId: string): Promise<OrderResult> {
+  const activities = proxyActivities<typeof orderActivities>({
+    startToCloseTimeout: '5 minutes',
+  });
+  
+  try {
+    // Process order
+    const paymentResult = await activities.processPayment(orderId);
+    const shipmentResult = await activities.shipOrder(orderId);
+    
+    return {
+      
+      orderId,
+      paymentId: paymentResult.id,
+      trackingNumber: shipmentResult.trackingNumber,
+    };
+    
+  } catch (error) {
+    // Log error details
+    console.error('Order processing failed', {
+      orderId,
+      error: error.message,
+      type: error.type,
+    });
+    
+    // Attempt recovery
+    try {
+      await activities.notifyCustomer(orderId, 'order-failed');
+      await activities.refundPayment(orderId);
+    } catch (recoveryError) {
+      console.error('Recovery failed', { recoveryError });
+    }
+    
+    // Re-throw or return error result
+    throw error;
+  }
+}
+```
+
+### 2. Saga Pattern with Compensation
+
+```typescript
+// TypeScript Example - Advanced Saga with rollback
+export async function bookingWorkflow(bookingData: BookingData): Promise<BookingResult> {
+  const activities = proxyActivities<typeof bookingActivities>({
+    startToCloseTimeout: '5 minutes',
+  });
+  
+  const completedSteps: string[] = [];
+  const compensationActions: Array<() => Promise<void>> = [];
+  
+  try {
+    // Step 1: Reserve flight
+    await activities.reserveFlight(bookingData.flightId);
+    completedSteps.push('flight');
+    compensationActions.push(() => activities.cancelFlight(bookingData.flightId));
+    
+    // Step 2: Reserve hotel
+    await activities.reserveHotel(bookingData.hotelId);
+    completedSteps.push('hotel');
+    compensationActions.push(() => activities.cancelHotel(bookingData.hotelId));
+    
+    // Step 3: Reserve car
+    await activities.reserveCar(bookingData.carId);
+    completedSteps.push('car');
+    compensationActions.push(() => activities.cancelCar(bookingData.carId));
+    
+    // Step 4: Charge customer
+    const payment = await activities.chargeCustomer(
+      bookingData.customerId,
+      bookingData.totalAmount
+    );
+    completedSteps.push('payment');
+    compensationActions.push(() => activities.refundPayment(payment.id));
+    
+    // All steps successful
+    await activities.confirmBooking(bookingData.bookingId);
+    
+    return {
+      
+      bookingId: bookingData.bookingId,
+      paymentId: payment.id,
+    };
+    
+  } catch (error) {
+    console.error('Booking failed, compensating...', {
+      completedSteps,
+      error: error.message,
+    });
+    
+    // Execute compensation in reverse order
+    for (let i = compensationActions.length - 1; i >= 0; i--) {
+      try {
+        await compensationActions[i]();
+        console.log(`Compensated step ${completedSteps[i]}`);
+      } catch (compensationError) {
+        console.error(`Compensation failed for ${completedSteps[i]}`, {
+          compensationError,
+        });
+        // Continue with other compensations
+      }
+    }
+    
+    // Notify customer
+    await activities.notifyBookingFailed(
+      bookingData.customerId,
+      error.message
+    );
+    
+    throw error;
+  }
+}
+```
+
+### 3. Partial Failure Handling
+
+```typescript
+// TypeScript Example - Continue on partial failure
+export async function batchProcessingWorkflow(items: string[]): Promise<BatchResult> {
+  const activities = proxyActivities<typeof batchActivities>({
+    startToCloseTimeout: '2 minutes',
+  });
+  
+  const results: ProcessResult[] = [];
+  const errors: ProcessError[] = [];
+  
+  // Process items in parallel
+  const promises = items.map(async (item) => {
+    try {
+      const result = await activities.processItem(item);
+      results.push({ item, 
+    } catch (error) {
+      errors.push({
+        item,
+        
+        error: error.message,
+        type: error.type,
+      });
+    }
+  });
+  
+  await Promise.all(promises);
+  
+  // Determine overall status
+  const hasFailures = errors.length > 0;
+  const allFailed = errors.length === items.length;
+  
+  if (allFailed) {
+    throw new Error(`All items failed: ${errors.length} errors`);
+  }
+  
+  return {
+    
+    totalItems: items.length,
+    successCount: results.length,
+    failureCount: errors.length,
+    results,
+    errors,
+  };
+}
+```
+
+## Timeout Handling
+
+### Activity Timeouts
+
+```typescript
+// TypeScript Example - Comprehensive timeout configuration
+const activities = proxyActivities<typeof myActivities>({
+  // Total time from schedule to completion (including retries)
+  scheduleToCloseTimeout: '10 minutes',
+  
+  // Time for single execution attempt
+  startToCloseTimeout: '2 minutes',
+  
+  // Time activity can wait in queue before execution
+  scheduleToStartTimeout: '1 minute',
+  
+  // Interval for heartbeat checks (for long-running activities)
+  heartbeatTimeout: '30 seconds',
+});
+```
+
+### Workflow Timeouts
+
+```typescript
+// Client-side timeout configuration
+await client.workflow.start(myWorkflow, {
+  taskQueue: 'my-queue',
+  workflowId: 'workflow-123',
+  
+  // Total workflow execution time
+  workflowExecutionTimeout: '30 days',
+  
+  // Single workflow run timeout
+  workflowRunTimeout: '24 hours',
+  
+  // Decision task timeout
+  workflowTaskTimeout: '10 seconds',
+});
+```
+
+### Timeout Error Handling
+
+```typescript
+// TypeScript Example
+import { ActivityFailure, TimeoutFailure } from '@temporalio/workflow';
+
+export async function handleTimeoutsWorkflow(): Promise<void> {
+  const activities = proxyActivities<typeof myActivities>({
+    startToCloseTimeout: '1 minute',
+  });
+  
+  try {
+    await activities.longRunningActivity();
+  } catch (error) {
+    if (error instanceof ActivityFailure) {
+      const cause = error.cause;
+      
+      if (cause instanceof TimeoutFailure) {
+        console.log('Activity timed out', {
+          timeoutType: cause.timeoutType,
+          lastHeartbeatDetails: cause.lastHeartbeatDetails,
+        });
+        
+        // Retry with longer timeout or handle differently
+        const extendedActivities = proxyActivities<typeof myActivities>({
+          startToCloseTimeout: '5 minutes',
+        });
+        
+        await extendedActivities.longRunningActivity();
+      }
+    } else {
+      throw error;
+    }
+  }
+}
+```
+
+## Error Propagation
+
+### Parent-Child Workflow Errors
+
+```typescript
+// TypeScript Example
+import { ChildWorkflowFailure } from '@temporalio/workflow';
+
+export async function parentWorkflow(): Promise<void> {
+  try {
+    const result = await startChild(childWorkflow, {
+      args: ['input'],
+      workflowId: 'child-123',
+    });
+    
+    console.log('Child completed successfully', { result });
+    
+  } catch (error) {
+    if (error instanceof ChildWorkflowFailure) {
+      console.error('Child workflow failed', {
+        workflowId: error.workflowId,
+        workflowType: error.workflowType,
+        cause: error.cause,
+      });
+      
+      // Decide how to handle child failure
+      // Option 1: Propagate error
+      throw error;
+      
+      // Option 2: Retry with different parameters
+      // await startChild(childWorkflow, { args: ['alternative-input'] });
+      
+      // Option 3: Continue with degraded functionality
+      // await fallbackActivity();
+    } else {
+      throw error;
+    }
+  }
+}
+```
+
+## Heartbeat and Cancellation
+
+### Activity Heartbeat for Cancellation
+
+```typescript
+// TypeScript Example
+import { Context, heartbeat, CancellationScope } from '@temporalio/activity';
+
+export async function processLargeDataset(datasetId: string): Promise<void> {
+  const items = await loadDataset(datasetId);
+  
+  for (let i = 0; i < items.length; i++) {
+    // Check for cancellation
+    if (Context.current().cancelled) {
+      console.log('Activity cancelled, cleaning up...');
+      await cleanup();
+      throw new Error('Activity was cancelled');
+    }
+    
+    // Process item
+    await processItem(items[i]);
+    
+    // Report progress via heartbeat
+    heartbeat({
+      progress: ((i + 1) / items.length) * 100,
+      processedCount: i + 1,
+      totalCount: items.length,
+    });
+  }
+}
+```
+
+### Graceful Cancellation
+
+```typescript
+// TypeScript Example
+export async function cancellableActivity(taskId: string): Promise<void> {
+  const resource = await acquireResource();
+  
+  try {
+    while (hasMoreWork()) {
+      // Check cancellation
+      if (Context.current().cancelled) {
+        console.log('Cancellation requested');
+        break;
+      }
+      
+      await doWork();
+      heartbeat();
+    }
+  } finally {
+    // Always cleanup, even on cancellation
+    await releaseResource(resource);
+  }
+}
+```
+
+## Error Monitoring & Alerting
+
+### Custom Error Metrics
+
+```typescript
+// TypeScript Example
+import { Counter, Histogram } from 'prom-client';
+
+const activityErrors = new Counter({
+  name: 'temporal_activity_errors_total',
+  help: 'Total activity errors',
+  labelNames: ['activity_type', 'error_type', 'retryable'],
+});
+
+const workflowErrors = new Counter({
+  name: 'temporal_workflow_errors_total',
+  help: 'Total workflow errors',
+  labelNames: ['workflow_type', 'error_type'],
+});
+
+// In activity
+export async function monitoredActivity(input: string): Promise<void> {
+  try {
+    await performWork(input);
+  } catch (error) {
+    activityErrors.inc({
+      activity_type: 'monitoredActivity',
+      error_type: error.type || 'unknown',
+      retryable: error.nonRetryable ? 'false' : 'true',
+    });
+    
+    throw error;
+  }
+}
+```
+
+### Error Logging
+
+```typescript
+// TypeScript Example - Structured error logging
+export async function loggingActivity(input: string): Promise<void> {
+  const logger = {
+    info: (msg: string, data?: any) => 
+      console.log(JSON.stringify({ level: 'info', msg, ...data })),
+    error: (msg: string, data?: any) => 
+      console.error(JSON.stringify({ level: 'error', msg, ...data })),
+  };
+  
+  try {
+    logger.info('Activity started', { input });
+    
+    const result = await performWork(input);
+    
+    logger.info('Activity completed', { result });
+    
+  } catch (error) {
+    logger.error('Activity failed', {
+      input,
+      error: {
+        message: error.message,
+        type: error.type,
+        stack: error.stack,
+        retryable: !error.nonRetryable,
+      },
+    });
+    
+    throw error;
+  }
+}
+```
+
+## Error Handling Best Practices
+
+### ✅ DO
+
+1. **Classify Errors Appropriately**
+```typescript
+// Good: Clear classification
+if (isValidationError(error)) {
+  throw ApplicationFailure.nonRetryable('Validation failed', 'ValidationError');
+}
+if (isNetworkError(error)) {
+  throw ApplicationFailure.retryable('Network error', 'NetworkError');
+}
+```
+
+2. **Include Context in Errors**
+```typescript
+// Good: Rich error context
+throw ApplicationFailure.nonRetryable(
+  'Customer not found',
+  'NotFoundError',
+  { customerId, searchedAt: Date.now() }
+);
+```
+
+3. **Implement Compensation**
+```typescript
+// Good: Proper rollback
+try {
+  await step1();
+  await step2();
+} catch (error) {
+  await undoStep1();
+  throw error;
+}
+```
+
+4. **Use Heartbeats for Long Activities**
+```typescript
+// Good: Regular heartbeats
+for (const item of items) {
+  await processItem(item);
+  heartbeat({ processed: items.indexOf(item) });
+}
+```
+
+5. **Log Errors with Context**
+```typescript
+// Good: Structured logging
+console.error('Operation failed', {
+  operation: 'processPayment',
+  customerId,
+  amount,
+  error: error.message,
+  errorType: error.type,
+});
+```
+
+### ❌ DON'T
+
+1. **Don't Catch and Ignore**
+```typescript
+// Bad: Silent failure
+try {
+  await criticalOperation();
+} catch (error) {
+  // Ignored - data loss!
+}
+```
+
+2. **Don't Retry Everything**
+```typescript
+// Bad: Retrying validation errors
+retry: {
+  maximumAttempts: 10,
+  // No nonRetryableErrorTypes specified
+}
+```
+
+3. **Don't Swallow Error Details**
+```typescript
+// Bad: Lost context
+catch (error) {
+  throw new Error('Something failed'); // Original error lost
+}
+```
+
+4. **Don't Block on Cleanup**
+```typescript
+// Bad: Synchronous cleanup in catch
+catch (error) {
+  cleanupSync(); // May block workflow
+  throw error;
+}
+```
+
+## Error Handling Patterns Summary
+
+| Pattern | When to Use | Implementation |
+|---------|-------------|----------------|
+| Automatic Retry | Transient failures | Configure retry policy |
+| Non-Retryable | Validation, not found | ApplicationFailure.nonRetryable() |
+| Saga/Compensation | Multi-step transactions | Try-catch with rollback |
+| Partial Failure | Batch processing | Continue on error, collect results |
+| Graceful Degradation | Optional features | Catch and fallback |
+| Timeout Recovery | Long operations | Handle TimeoutFailure |
+| Circuit Breaker | Failing dependencies | Track failures, skip after threshold |
+| Error Aggregation | Multiple operations | Collect all errors, report together |
+
+## Troubleshooting Common Errors
+
+### Issue: Activity Keeps Retrying Forever
+
+**Cause**: No maximum attempts set or wrong error classification
+
+**Solution**:
+```typescript
+retry: {
+  maximumAttempts: 5, // Set limit
+  nonRetryableErrorTypes: ['ValidationError', 'NotFoundError'],
+}
+```
+
+### Issue: Workflow Fails Immediately
+
+**Cause**: Non-retryable error thrown for temporary issue
+
+**Solution**:
+```typescript
+// Make error retryable
+throw ApplicationFailure.retryable('Temporary issue', 'TemporaryError');
+```
+
+### Issue: Lost Error Context
+
+**Cause**: Error details not preserved
+
+**Solution**:
+```typescript
+throw ApplicationFailure.nonRetryable(
+  error.message,
+  error.type,
+  { originalError: error, context: additionalData }
+);
+```
+
+→ See `temporal-activities.mdc` for activity error patterns
+→ See `temporal-workflows.mdc` for workflow error patterns
+→ See `temporal-testing.mdc` for testing error scenarios
+

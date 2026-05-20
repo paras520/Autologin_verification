@@ -55,7 +55,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     soft_errors = health_result.get("soft_errors") or []
     page_result = health_result.get("page_result") or {}
     health_check = health_result.get("health") in {"OK", "REDIRECT"}
-    token_detected = None  # disabled — token detection re-enabled later
+    token_detected: dict | None = None  # disabled — token detection re-enabled later
     # Use the final resolved URL for all LLM calls so domain/path matching is
     # accurate even when the original URL redirects (http→https, subdomain hops, etc.)
     effective_url = page_result.get("final_url") or url

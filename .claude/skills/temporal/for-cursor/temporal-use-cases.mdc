@@ -1,0 +1,890 @@
+# Temporal Use Cases - Implementation Guide by Scenario
+
+**
+
+## Use Case Detection & Service Selection
+
+This guide helps Cursor AI automatically detect use cases and select the appropriate Temporal services and patterns based on current best practices.
+
+## Decision Tree
+
+```
+User's Code Intent
+       ↓
+┌──────────────────────────────────────────┐
+│  Does it involve long-running logic?     │
+│  Multiple steps? External services?      │
+└──────────────────────────────────────────┘
+       ↓ YES
+┌──────────────────────────────────────────┐
+│     Temporal is Recommended              │
+└──────────────────────────────────────────┘
+       ↓
+┌──────────────────────────────────────────┐
+│  What type of use case?                  │
+├──────────────────────────────────────────┤
+│  1. Background Jobs                      │
+│  2. Scheduled/Cron Tasks                 │
+│  3. Distributed Transactions (Saga)      │
+│  4. Microservice Orchestration           │
+│  5. Event-Driven Processing              │
+│  6. Long-Running Operations              │
+│  7. Human-in-the-Loop                    │
+│  8. Data Pipelines                       │
+│  9. File Processing                      │
+│  10. API Orchestration                   │
+└──────────────────────────────────────────┘
+```
+
+## Use Case 1: Background Job Processing
+
+### Detection Patterns
+```typescript
+// Detect these patterns:
+- setTimeout/setInterval
+- Job queue libraries (Bull, BullMQ, Celery)
+- Async processing needs
+- Task queues
+```
+
+### Recommended Temporal Approach
+
+**Components**:
+- Simple Workflow for job orchestration
+- Activities for job execution
+- Retry policies for reliability
+
+**Implementation**:
+
+```typescript
+// TypeScript Example
+// activities.ts
+export async function processJob(jobId: string, data: JobData): Promise<JobResult> {
+  console.log(`Processing job ${jobId}`);
+  
+  // Actual job logic
+  const result = await performJobWork(data);
+  
+  // Update job status
+  await updateJobStatus(jobId, 'completed', result);
+  
+  return result;
+}
+
+// workflows.ts
+import { proxyActivities } from '@temporalio/workflow';
+import type * as activities from './activities';
+
+const { processJob } = proxyActivities<typeof activities>({
+  startToCloseTimeout: '10 minutes',
+  retry: {
+    initialInterval: '1s',
+    maximumAttempts: 3,
+    backoffCoefficient: 2,
+  },
+});
+
+export async function jobWorkflow(jobId: string, data: JobData): Promise<JobResult> {
+  return await processJob(jobId, data);
+}
+
+// client.ts - Start job
+const client = new WorkflowClient();
+await client.start(jobWorkflow, {
+  args: ['job-123', jobData],
+  taskQueue: 'background-jobs',
+  workflowId: `job-${jobId}`,
+});
+```
+
+```python
+# Python Example
+from temporalio import workflow, activity
+from datetime import timedelta
+
+@activity.defn
+async def process_job(job_id: str, data: dict) -> dict:
+    # Job processing logic
+    result = await perform_job_work(data)
+    await update_job_status(job_id, 'completed', result)
+    return result
+
+@workflow.defn
+class JobWorkflow:
+    @workflow.run
+    async def run(self, job_id: str, data: dict) -> dict:
+        return await workflow.execute_activity(
+            process_job,
+            job_id,
+            data,
+            start_to_close_timeout=timedelta(minutes=10),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=1),
+                maximum_attempts=3,
+                backoff_coefficient=2.0,
+            ),
+        )
+```
+
+**Benefits**:
+- ✅ Automatic retries on failure
+- ✅ Job status tracking
+- ✅ Visibility into execution
+- ✅ No message queue needed
+
+## Use Case 2: Scheduled/Cron Jobs
+
+### Detection Patterns
+```typescript
+// Detect:
+- cron expressions
+- setInterval with long intervals
+- Scheduled tasks (node-cron, node-schedule)
+- AWS EventBridge patterns
+```
+
+### Recommended Temporal Approach
+
+**Components**:
+- Cron Workflow with schedule
+- Activities for task execution
+
+**Implementation**:
+
+```typescript
+// TypeScript Example
+// workflows.ts
+export async function dailyReportWorkflow(): Promise<void> {
+  const { generateReport, sendReport, archiveOldReports } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '30 minutes',
+  });
+  
+  const reportDate = new Date();
+  
+  // Generate report
+  const report = await generateReport(reportDate);
+  
+  // Send to stakeholders
+  await sendReport(report, ['team@company.com']);
+  
+  // Cleanup old reports
+  await archiveOldReports(30); // Archive reports older than 30 days
+}
+
+// client.ts - Schedule workflow
+await client.workflow.start(dailyReportWorkflow, {
+  taskQueue: 'reports',
+  workflowId: 'daily-report',
+  cronSchedule: '0 9 * * *', // Every day at 9 AM
+});
+```
+
+**Alternative: On-demand scheduled workflows**
+
+```typescript
+// workflows.ts - With dynamic scheduling
+export async function scheduledMaintenanceWorkflow(
+  taskType: string,
+  scheduleTime: Date
+): Promise<void> {
+  // Wait until scheduled time
+  await sleep(scheduleTime.getTime() - Date.now());
+  
+  // Execute maintenance
+  const { performMaintenance, notifyCompletion } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '1 hour',
+  });
+  
+  await performMaintenance(taskType);
+  await notifyCompletion(taskType);
+}
+```
+
+**Benefits**:
+- ✅ No cron daemon needed
+- ✅ Built-in visibility
+- ✅ Failure handling
+- ✅ Dynamic scheduling support
+
+## Use Case 3: Distributed Transactions (Saga Pattern)
+
+### Detection Patterns
+```typescript
+// Detect:
+- Multi-service transactions
+- Compensation logic
+- Rollback requirements
+- Two-phase commit patterns
+```
+
+### Recommended Temporal Approach
+
+**Components**:
+- Workflow for saga coordination
+- Activities for each transaction step
+- Compensation activities for rollback
+
+**Implementation**:
+
+```typescript
+// TypeScript Example - Travel Booking Saga
+export async function bookTripWorkflow(tripData: TripBooking): Promise<BookingResult> {
+  const activities = proxyActivities<typeof bookingActivities>({
+    startToCloseTimeout: '5 minutes',
+  });
+  
+  let flightBooked = false;
+  let hotelBooked = false;
+  let carBooked = false;
+  
+  try {
+    // Step 1: Book flight
+    const flightResult = await activities.bookFlight(tripData.flightDetails);
+    flightBooked = true;
+    
+    // Step 2: Book hotel
+    const hotelResult = await activities.bookHotel(tripData.hotelDetails);
+    hotelBooked = true;
+    
+    // Step 3: Book rental car
+    const carResult = await activities.bookCar(tripData.carDetails);
+    carBooked = true;
+    
+    // Step 4: Charge customer
+    await activities.chargeCustomer(
+      tripData.customerId,
+      flightResult.price + hotelResult.price + carResult.price
+    );
+    
+    // Step 5: Send confirmation
+    await activities.sendConfirmationEmail(tripData.email, {
+      flight: flightResult,
+      hotel: hotelResult,
+      car: carResult,
+    });
+    
+    return {
+      
+      bookingId: `trip-${Date.now()}`,
+      flight: flightResult,
+      hotel: hotelResult,
+      car: carResult,
+    };
+    
+  } catch (error) {
+    // Compensation: Rollback in reverse order
+    console.log('Booking failed, rolling back...');
+    
+    if (carBooked) {
+      await activities.cancelCar(tripData.carDetails.reservationId);
+    }
+    if (hotelBooked) {
+      await activities.cancelHotel(tripData.hotelDetails.reservationId);
+    }
+    if (flightBooked) {
+      await activities.cancelFlight(tripData.flightDetails.reservationId);
+    }
+    
+    // Notify customer of failure
+    await activities.sendFailureEmail(tripData.email, error.message);
+    
+    throw error;
+  }
+}
+```
+
+```python
+# Python Example
+@workflow.defn
+class PaymentSagaWorkflow:
+    @workflow.run
+    async def run(self, order_id: str, amount: float) -> dict:
+        reserved = False
+        charged = False
+        
+        try:
+            # Reserve inventory
+            await workflow.execute_activity(
+                reserve_inventory,
+                order_id,
+                start_to_close_timeout=timedelta(minutes=2)
+            )
+            reserved = True
+            
+            # Charge payment
+            await workflow.execute_activity(
+                charge_payment,
+                order_id,
+                amount,
+                start_to_close_timeout=timedelta(minutes=2)
+            )
+            charged = True
+            
+            # Fulfill order
+            await workflow.execute_activity(
+                fulfill_order,
+                order_id,
+                start_to_close_timeout=timedelta(minutes=5)
+            )
+            
+            return {"status": "success", "order_id": order_id}
+            
+        except Exception as e:
+            # Compensate
+            if charged:
+                await workflow.execute_activity(
+                    refund_payment,
+                    order_id,
+                    start_to_close_timeout=timedelta(minutes=2)
+                )
+            if reserved:
+                await workflow.execute_activity(
+                    release_inventory,
+                    order_id,
+                    start_to_close_timeout=timedelta(minutes=2)
+                )
+            raise
+```
+
+**Benefits**:
+- ✅ Automatic compensation
+- ✅ Visibility into saga state
+- ✅ Reliable rollback
+- ✅ No distributed transaction coordinator needed
+
+## Use Case 4: Microservice Orchestration
+
+### Detection Patterns
+```typescript
+// Detect:
+- Multiple service calls
+- Service coordination
+- Step Functions patterns
+- API gateway orchestration
+```
+
+### Recommended Temporal Approach
+
+**Implementation**:
+
+```typescript
+// TypeScript Example - Order Processing
+export async function processOrderWorkflow(orderId: string): Promise<OrderResult> {
+  const { 
+    validateOrder, 
+    checkInventory, 
+    reserveInventory,
+    processPayment,
+    shipOrder,
+    sendNotification 
+  } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '2 minutes',
+  });
+  
+  // Step 1: Validate order
+  const order = await validateOrder(orderId);
+  
+  // Step 2: Check inventory across multiple services
+  const inventoryCheck = await checkInventory(order.items);
+  
+  if (!inventoryCheck.available) {
+    await sendNotification(order.customerId, 'out-of-stock');
+    throw new Error('Items out of stock');
+  }
+  
+  // Step 3: Reserve inventory
+  await reserveInventory(order.items);
+  
+  // Step 4: Process payment
+  const paymentResult = await processPayment(order.total, order.paymentMethod);
+  
+  // Step 5: Ship order (parallel with notification)
+  const [shipmentResult] = await Promise.all([
+    shipOrder(orderId, order.shippingAddress),
+    sendNotification(order.customerId, 'order-confirmed', { orderId }),
+  ]);
+  
+  return {
+    orderId,
+    
+    trackingNumber: shipmentResult.trackingNumber,
+  };
+}
+```
+
+**Benefits**:
+- ✅ Service coordination without tight coupling
+- ✅ Automatic retries per service
+- ✅ Visibility across services
+- ✅ Easy to add new services
+
+## Use Case 5: Event-Driven Processing
+
+### Detection Patterns
+```typescript
+// Detect:
+- Event handlers
+- Kafka consumers
+- Message queue processors
+- Webhook handlers
+```
+
+### Recommended Temporal Approach
+
+**Implementation**:
+
+```typescript
+// TypeScript Example - User Signup Flow
+import { defineSignal, setHandler } from '@temporalio/workflow';
+
+const userVerifiedSignal = defineSignal('userVerified');
+const userUpgradedSignal = defineSignal('userUpgraded');
+
+export async function userLifecycleWorkflow(userId: string): Promise<void> {
+  const activities = proxyActivities<typeof userActivities>({
+    startToCloseTimeout: '5 minutes',
+  });
+  
+  let isVerified = false;
+  let isPremium = false;
+  
+  // Set up signal handlers
+  setHandler(userVerifiedSignal, () => {
+    isVerified = true;
+  });
+  
+  setHandler(userUpgradedSignal, () => {
+    isPremium = true;
+  });
+  
+  // Initial user creation
+  await activities.createUserAccount(userId);
+  await activities.sendWelcomeEmail(userId);
+  
+  // Wait for email verification (with timeout)
+  const verified = await condition(() => isVerified, '7 days');
+  
+  if (!verified) {
+    await activities.sendReminderEmail(userId);
+    await condition(() => isVerified, '7 days');
+  }
+  
+  if (isVerified) {
+    await activities.enableFullFeatures(userId);
+    await activities.sendOnboardingSequence(userId);
+  }
+  
+  // Wait for premium upgrade (long-running)
+  await condition(() => isPremium, '365 days');
+  
+  if (isPremium) {
+    await activities.enablePremiumFeatures(userId);
+    await activities.sendPremiumWelcome(userId);
+  }
+}
+
+// Event handlers send signals
+app.post('/webhooks/user-verified', async (req, res) => {
+  const { userId } = req.body;
+  const handle = client.workflow.getHandle(`user-lifecycle-${userId}`);
+  await handle.signal(userVerifiedSignal);
+  res.json({ success: true });
+});
+```
+
+**Benefits**:
+- ✅ Stateful event processing
+- ✅ Long-running processes
+- ✅ Exactly-once semantics
+- ✅ Event history tracking
+
+## Use Case 6: Long-Running Operations
+
+### Detection Patterns
+```typescript
+// Detect:
+- Operations taking hours/days
+- Approval workflows
+- State machines
+- Process orchestration
+```
+
+### Recommended Temporal Approach
+
+**Implementation**:
+
+```typescript
+// TypeScript Example - Document Approval
+export async function documentApprovalWorkflow(
+  documentId: string,
+  approvers: string[]
+): Promise<ApprovalResult> {
+  const activities = proxyActivities<typeof docActivities>({
+    startToCloseTimeout: '5 minutes',
+  });
+  
+  const approvals: Map<string, boolean> = new Map();
+  const rejections: string[] = [];
+  
+  // Signal handlers
+  const approveSignal = defineSignal<[string, string]>('approve');
+  const rejectSignal = defineSignal<[string, string]>('reject');
+  
+  setHandler(approveSignal, (approver: string, comments: string) => {
+    approvals.set(approver, true);
+  });
+  
+  setHandler(rejectSignal, (approver: string, reason: string) => {
+    rejections.push(`${approver}: ${reason}`);
+  });
+  
+  // Request approvals
+  await activities.requestApprovals(documentId, approvers);
+  
+  // Wait for all approvals or any rejection (30 days timeout)
+  const completed = await condition(
+    () => approvals.size === approvers.length || rejections.length > 0,
+    '30 days'
+  );
+  
+  if (rejections.length > 0) {
+    await activities.markDocumentRejected(documentId, rejections);
+    return { 
+  }
+  
+  if (approvals.size === approvers.length) {
+    await activities.markDocumentApproved(documentId);
+    await activities.publishDocument(documentId);
+    return { 
+  }
+  
+  // Timeout
+  await activities.markDocumentExpired(documentId);
+  return { 
+}
+```
+
+**Benefits**:
+- ✅ Handles days/weeks/months durations
+- ✅ No state management needed
+- ✅ Query workflow status anytime
+- ✅ Timeout handling built-in
+
+## Use Case 7: Data Pipeline Orchestration
+
+### Detection Patterns
+```typescript
+// Detect:
+- ETL processes
+- Data transformations
+- Multi-stage pipelines
+- Airflow/Luigi patterns
+```
+
+### Recommended Temporal Approach
+
+**Implementation**:
+
+```typescript
+// TypeScript Example - ETL Pipeline
+export async function dataEtlWorkflow(pipelineId: string, source: string): Promise<PipelineResult> {
+  const activities = proxyActivities<typeof etlActivities>({
+    startToCloseTimeout: '30 minutes',
+    heartbeatTimeout: '1 minute',
+  });
+  
+  // Stage 1: Extract
+  const extractedData = await activities.extractData(source);
+  
+  // Stage 2: Transform (parallel processing)
+  const transformTasks = extractedData.batches.map(batch =>
+    activities.transformData(batch)
+  );
+  const transformedData = await Promise.all(transformTasks);
+  
+  // Stage 3: Validate
+  const validationResults = await activities.validateData(transformedData);
+  
+  if (!validationResults.isValid) {
+    await activities.logValidationErrors(validationResults.errors);
+    throw new Error('Data validation failed');
+  }
+  
+  // Stage 4: Load (with retries)
+  await activities.loadData(transformedData, 'data-warehouse');
+  
+  // Stage 5: Post-processing
+  await Promise.all([
+    activities.updateMetadata(pipelineId, transformedData.stats),
+    activities.sendSuccessNotification(pipelineId),
+    activities.archiveSource(source),
+  ]);
+  
+  return {
+    pipelineId,
+    recordsProcessed: transformedData.length,
+    
+  };
+}
+```
+
+**Benefits**:
+- ✅ Visual pipeline execution
+- ✅ Partial retry on failure
+- ✅ Complex dependencies handled
+- ✅ Better than Airflow for dynamic pipelines
+
+## Use Case 8: File Processing
+
+### Detection Patterns
+```typescript
+// Detect:
+- File upload handling
+- Image/video processing
+- Document conversion
+- Batch file operations
+```
+
+### Recommended Temporal Approach
+
+**Implementation**:
+
+```typescript
+// TypeScript Example - Video Processing
+export async function videoProcessingWorkflow(videoId: string, fileUrl: string): Promise<VideoResult> {
+  const activities = proxyActivities<typeof videoActivities>({
+    startToCloseTimeout: '2 hours',
+    heartbeatTimeout: '30 seconds',
+  });
+  
+  // Download video
+  const localPath = await activities.downloadVideo(videoId, fileUrl);
+  
+  // Process in parallel
+  const [thumbnail, transcription, analysis] = await Promise.all([
+    activities.generateThumbnail(localPath),
+    activities.transcribeAudio(localPath),
+    activities.analyzeContent(localPath),
+  ]);
+  
+  // Generate different quality versions
+  const qualities = ['1080p', '720p', '480p', '360p'];
+  const encodingTasks = qualities.map(quality =>
+    activities.encodeVideo(localPath, quality)
+  );
+  const encodedVideos = await Promise.all(encodingTasks);
+  
+  // Upload to CDN
+  await activities.uploadToCdn(videoId, encodedVideos);
+  
+  // Metadata and notifications
+  await activities.updateVideoMetadata(videoId, {
+    thumbnail,
+    transcription,
+    analysis,
+    availableQualities: qualities,
+  });
+  
+  await activities.notifyUser(videoId, 'processing-complete');
+  
+  // Cleanup
+  await activities.deleteLocalFiles(localPath);
+  
+  return {
+    videoId,
+    
+    thumbnail,
+    qualities,
+  };
+}
+```
+
+**Benefits**:
+- ✅ Progress tracking
+- ✅ Automatic retry on failure
+- ✅ Resume from checkpoint
+- ✅ Parallel processing
+
+## Use Case 9: API Orchestration
+
+### Detection Patterns
+```typescript
+// Detect:
+- Multiple API calls
+- API retry logic
+- Rate limiting needs
+- Third-party integrations
+```
+
+### Recommended Temporal Approach
+
+**Implementation**:
+
+```typescript
+// TypeScript Example - Customer Onboarding with Multiple APIs
+export async function customerOnboardingWorkflow(customerId: string): Promise<OnboardingResult> {
+  const activities = proxyActivities<typeof apiActivities>({
+    startToCloseTimeout: '2 minutes',
+    retry: {
+      initialInterval: '1s',
+      backoffCoefficient: 2,
+      maximumAttempts: 5,
+      nonRetryableErrorTypes: ['InvalidInput', 'Unauthorized'],
+    },
+  });
+  
+  // Create customer in CRM
+  const crmRecord = await activities.createCrmRecord(customerId);
+  
+  // Create accounts in parallel (different services)
+  const [stripeCustomer, mailchimpContact, analyticsProfile] = await Promise.all([
+    activities.createStripeCustomer(customerId, crmRecord.email),
+    activities.addToMailchimp(crmRecord.email, crmRecord.name),
+    activities.createAnalyticsProfile(customerId, crmRecord),
+  ]);
+  
+  // Setup integrations
+  await activities.linkAccounts(customerId, {
+    stripe: stripeCustomer.id,
+    mailchimp: mailchimpContact.id,
+    analytics: analyticsProfile.id,
+  });
+  
+  // Send welcome sequence
+  await activities.triggerWelcomeEmail(customerId);
+  
+  return {
+    customerId,
+    
+    integrations: {
+      stripe: stripeCustomer.id,
+      mailchimp: mailchimpContact.id,
+      analytics: analyticsProfile.id,
+    },
+  };
+}
+```
+
+**Benefits**:
+- ✅ Automatic retries with backoff
+- ✅ Rate limiting built-in
+- ✅ Failure handling
+- ✅ API call history
+
+## Use Case 10: Human-in-the-Loop Workflows
+
+### Detection Patterns
+```typescript
+// Detect:
+- Approval systems
+- Manual review steps
+- Escalation logic
+- User interaction requirements
+```
+
+### Recommended Temporal Approach
+
+**Implementation**:
+
+```typescript
+// TypeScript Example - Content Moderation
+export async function contentModerationWorkflow(contentId: string): Promise<ModerationResult> {
+  const activities = proxyActivities<typeof modActivities>({
+    startToCloseTimeout: '5 minutes',
+  });
+  
+  let approved = false;
+  let rejected = false;
+  let moderatorId = '';
+  
+  const approveSignal = defineSignal<[string]>('approve');
+  const rejectSignal = defineSignal<[string, string]>('reject');
+  
+  setHandler(approveSignal, (modId: string) => {
+    approved = true;
+    moderatorId = modId;
+  });
+  
+  setHandler(rejectSignal, (modId: string, reason: string) => {
+    rejected = true;
+    moderatorId = modId;
+  });
+  
+  // Auto-moderate with AI first
+  const aiResult = await activities.aiModeration(contentId);
+  
+  if (aiResult.confidence > 0.95 && aiResult.decision === 'approve') {
+    await activities.publishContent(contentId);
+    return { 
+  }
+  
+  if (aiResult.confidence > 0.95 && aiResult.decision === 'reject') {
+    await activities.removeContent(contentId);
+    return { 
+  }
+  
+  // Need human review
+  await activities.assignToModerator(contentId);
+  
+  // Wait for moderator decision (24 hours)
+  const decided = await condition(() => approved || rejected, '24 hours');
+  
+  if (!decided) {
+    // Escalate after timeout
+    await activities.escalateToSeniorMod(contentId);
+    await condition(() => approved || rejected, '48 hours');
+  }
+  
+  if (approved) {
+    await activities.publishContent(contentId);
+    return { 
+  } else {
+    await activities.removeContent(contentId);
+    return { 
+  }
+}
+```
+
+**Benefits**:
+- ✅ Timeout and escalation built-in
+- ✅ Audit trail of decisions
+- ✅ No polling needed
+- ✅ Clean state management
+
+## Quick Selection Guide
+
+| Use Case | Primary Pattern | Key Features |
+|----------|-----------------|--------------|
+| Background Jobs | Simple Workflow + Activity | Retries, visibility |
+| Scheduled Tasks | Cron Workflow | No cron daemon |
+| Distributed Transactions | Saga Workflow | Compensation logic |
+| Microservices | Orchestration Workflow | Service coordination |
+| Event Processing | Signal-based Workflow | Stateful processing |
+| Long-Running | Signal + Timer Workflow | Days/weeks duration |
+| Data Pipeline | Multi-stage Workflow | Partial retry |
+| File Processing | Heartbeat Activities | Progress tracking |
+| API Orchestration | Parallel Activities | Rate limiting |
+| Human-in-Loop | Signal + Timeout Workflow | Escalation support |
+
+## Anti-Patterns (When NOT to Use Temporal)
+
+❌ **Don't use Temporal for**:
+- Simple CRUD operations
+- Synchronous request-response (<1 second)
+- Pure data transformations
+- High-frequency events (>1000/sec)
+- Simple scheduled tasks (basic cron)
+- Real-time streaming
+
+✅ **Use Temporal when**:
+- Multiple steps involved
+- Need reliability guarantees
+- External service coordination
+- Long-running processes
+- Failure recovery is critical
+- Visibility into execution needed
+
+→ See `temporal-workflows.mdc` for workflow patterns
+→ See `temporal-activities.mdc` for activity patterns
+→ See `temporal-language-examples.mdc` for language-specific code
+

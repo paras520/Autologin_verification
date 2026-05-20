@@ -12,7 +12,6 @@ Phase 3   → country_match_activity      (deterministic country check)
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from temporalio import workflow
@@ -138,7 +137,7 @@ class VerificationWorkflow:
                 marked_for_human_review=True,
                 marked_for_deletion=marked_for_deletion,
                 errors="",
-                time=datetime.now().isoformat(),
+                time=workflow.now().isoformat(),
             )
 
         # ------------------------------------------------------------------
@@ -191,7 +190,7 @@ class VerificationWorkflow:
                 marked_for_human_review=False,
                 marked_for_deletion=True,
                 errors="",
-                time=datetime.now().isoformat(),
+                time=workflow.now().isoformat(),
             )
 
         # ------------------------------------------------------------------
@@ -304,5 +303,5 @@ class VerificationWorkflow:
             marked_for_human_review=needs_human_review,
             marked_for_deletion=marked_for_deletion,
             errors="",
-            time=datetime.now().isoformat(),
+            time=workflow.now().isoformat(),
         )

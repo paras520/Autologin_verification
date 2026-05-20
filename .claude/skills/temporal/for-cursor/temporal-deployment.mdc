@@ -1,0 +1,1107 @@
+# Temporal Deployment - Production Implementation Guide
+
+**
+**Temporal Server Version:** 1.23+
+
+## Deployment Overview
+
+Deploying Temporal to production requires careful planning across infrastructure, security, monitoring, and operational excellence. This guide covers all deployment scenarios with 2026 best practices.
+
+## Deployment Options
+
+### Option 1: Temporal Cloud (Recommended)
+
+**Best For**: Most production use cases
+
+**Advantages**:
+- ✅ Fully managed service
+- ✅ 99.99% uptime SLA
+- ✅ Automatic scaling
+- ✅ Multi-region support
+- ✅ Enterprise security (mTLS, encryption)
+- ✅ No infrastructure management
+
+**Setup**:
+
+```typescript
+// Temporal Cloud connection configuration
+import { Connection, WorkflowClient } from '@temporalio/client';
+import fs from 'fs';
+
+async function connectToCloud() {
+  const connection = await Connection.connect({
+    address: 'your-namespace.tmprl.cloud:7233',
+    tls: {
+      clientCertPair: {
+        crt: fs.readFileSync('./client.pem'),
+        key: fs.readFileSync('./client-key.pem'),
+      },
+    },
+  });
+
+  const client = new WorkflowClient({
+    connection,
+    namespace: 'your-namespace.account-id',
+  });
+
+  return { connection, client };
+}
+```
+
+```python
+# Python Temporal Cloud connection
+from temporalio.client import Client, TLSConfig
+
+async def connect_to_cloud():
+    client = await Client.connect(
+        "your-namespace.tmprl.cloud:7233",
+        namespace="your-namespace.account-id",
+        tls=TLSConfig(
+            client_cert=open("client.pem", "rb").read(),
+            client_private_key=open("client-key.pem", "rb").read(),
+        ),
+    )
+    return client
+```
+
+```go
+// Go Temporal Cloud connection
+import (
+    "crypto/tls"
+    "go.temporal.io/sdk/client"
+)
+
+func connectToCloud() (client.Client, error) {
+    cert, err := tls.LoadX509KeyPair("client.pem", "client-key.pem")
+    if err != nil {
+        return nil, err
+    }
+
+    return client.Dial(client.Options{
+        HostPort:  "your-namespace.tmprl.cloud:7233",
+        Namespace: "your-namespace.account-id",
+        ConnectionOptions: client.ConnectionOptions{
+            TLS: &tls.Config{
+                Certificates: []tls.Certificate{cert},
+            },
+        },
+    })
+}
+```
+
+**Environment Configuration**:
+
+```bash
+# .env.production
+TEMPORAL_ADDRESS=your-namespace.tmprl.cloud:7233
+TEMPORAL_NAMESPACE=your-namespace.account-id
+TEMPORAL_CLIENT_CERT_PATH=/certs/client.pem
+TEMPORAL_CLIENT_KEY_PATH=/certs/client-key.pem
+```
+
+### Option 2: Self-Hosted on Kubernetes
+
+**Best For**: Organizations with Kubernetes expertise, compliance requirements
+
+**Architecture**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Kubernetes Cluster                       │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │              Temporal Services (StatefulSet)           │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐            │ │
+│  │  │ Frontend │  │ History  │  │ Matching │            │ │
+│  │  │ (2 pods) │  │ (4 pods) │  │ (2 pods) │            │ │
+│  │  └──────────┘  └──────────┘  └──────────┘            │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │          Database (PostgreSQL/Cassandra)               │ │
+│  │               (Managed or self-hosted)                 │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │               Workers (Deployment)                     │ │
+│  │          (Auto-scaling based on metrics)               │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Helm Installation**:
+
+```bash
+# Add Temporal Helm repository
+helm repo add temporalio https://go.temporal.io/helm-charts
+helm repo update
+
+# Install Temporal
+helm install temporal temporalio/temporal \
+  --namespace temporal \
+  --create-namespace \
+  --values values-production.yaml
+```
+
+**values-production.yaml**:
+
+```yaml
+server:
+  replicaCount: 2
+  
+  frontend:
+    replicaCount: 2
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+
+  history:
+    replicaCount: 4
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+
+  matching:
+    replicaCount: 2
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+
+  worker:
+    replicaCount: 2
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+# Database configuration
+postgresql:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 100Gi
+  resources:
+    requests:
+      memory: 8Gi
+      cpu: 2000m
+    limits:
+      memory: 16Gi
+      cpu: 4000m
+
+# Use external database (recommended)
+# postgresql:
+#   enabled: false
+# 
+# cassandra:
+#   enabled: false
+#
+# server:
+#   config:
+#     persistence:
+#       default:
+#         driver: "sql"
+#         sql:
+#           driver: "postgres"
+#           host: "postgres.example.com"
+#           port: 5432
+#           database: "temporal"
+#           user: "temporal"
+#           password: "${POSTGRES_PASSWORD}"
+
+# Monitoring
+prometheus:
+  enabled: true
+
+grafana:
+  enabled: true
+
+# Ingress
+ingress:
+  enabled: true
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: temporal.example.com
+      paths:
+        - path: /
+  tls:
+    - secretName: temporal-tls
+      hosts:
+        - temporal.example.com
+```
+
+### Option 3: Self-Hosted with Docker Compose
+
+**Best For**: Development, staging, small deployments
+
+```yaml
+# docker-compose-production.yml
+version: '3.8'
+
+services:
+  postgresql:
+    image: postgres:13
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - temporal-network
+    restart: unless-stopped
+
+  elasticsearch:
+    image: elasticsearch:7.16.2
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - temporal-network
+    restart: unless-stopped
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    depends_on:
+      - postgresql
+      - elasticsearch
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=${POSTGRES_PASSWORD}
+      - POSTGRES_SEEDS=postgresql
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/production.yaml
+      - ENABLE_ES=true
+      - ES_SEEDS=elasticsearch
+      - ES_VERSION=v7
+    networks:
+      - temporal-network
+    ports:
+      - "7233:7233"
+    volumes:
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    depends_on:
+      - temporal
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=https://temporal-ui.example.com
+    networks:
+      - temporal-network
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  elasticsearch-data:
+
+networks:
+  temporal-network:
+    driver: bridge
+```
+
+## Worker Deployment
+
+### Kubernetes Worker Deployment
+
+```yaml
+# worker-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker
+  namespace: production
+  labels:
+    app: temporal-worker
+spec:
+  replicas: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: temporal-worker
+  template:
+    metadata:
+      labels:
+        app: temporal-worker
+    spec:
+      containers:
+      - name: worker
+        image: myregistry/temporal-worker:v1.2.3
+        imagePullPolicy: Always
+        env:
+        - name: TEMPORAL_ADDRESS
+          valueFrom:
+            configMapKeyRef:
+              name: temporal-config
+              key: address
+        - name: TEMPORAL_NAMESPACE
+          valueFrom:
+            configMapKeyRef:
+              name: temporal-config
+              key: namespace
+        - name: TASK_QUEUE
+          value: "production-queue"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: database-credentials
+              key: url
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-credentials
+              key: key
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1000m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+        ports:
+        - containerPort: 8080
+          name: health
+      terminationGracePeriodSeconds: 60
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: temporal-worker-hpa
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: temporal-worker
+  minReplicas: 5
+  maxReplicas: 50
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-config
+  namespace: production
+data:
+  address: "temporal.default.svc.cluster.local:7233"
+  namespace: "production"
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: temporal-worker-pdb
+  namespace: production
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: temporal-worker
+```
+
+### Docker Worker Deployment
+
+```dockerfile
+# Production Dockerfile
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:18-alpine
+
+# Security: Run as non-root
+RUN addgroup -g 1001 -S temporal && \
+    adduser -S temporal -u 1001
+
+WORKDIR /app
+
+# Copy dependencies
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package*.json ./
+
+# Change ownership
+RUN chown -R temporal:temporal /app
+
+USER temporal
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"
+
+EXPOSE 8080
+
+CMD ["node", "dist/worker.js"]
+```
+
+## CI/CD Pipeline
+
+### GitHub Actions Example
+
+```yaml
+# .github/workflows/deploy-production.yml
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/worker
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run tests
+        run: npm test
+      
+      - name: Run integration tests
+        run: npm run test:integration
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+      
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl set image deployment/temporal-worker \
+            worker=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -n production
+          
+          kubectl rollout status deployment/temporal-worker -n production
+      
+      - name: Notify on failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+```
+
+## Configuration Management
+
+### Environment-Specific Configuration
+
+```typescript
+// config.ts
+interface Config {
+  temporal: {
+    address: string;
+    namespace: string;
+    taskQueue: string;
+    tls?: {
+      clientCertPath: string;
+      clientKeyPath: string;
+    };
+  };
+  database: {
+    url: string;
+  };
+  logging: {
+    level: string;
+  };
+  metrics: {
+    enabled: boolean;
+    port: number;
+  };
+}
+
+function loadConfig(): Config {
+  const env = process.env.NODE_ENV || 'development';
+  
+  const baseConfig: Config = {
+    temporal: {
+      address: process.env.TEMPORAL_ADDRESS || 'localhost:7233',
+      namespace: process.env.TEMPORAL_NAMESPACE || 'default',
+      taskQueue: process.env.TASK_QUEUE || 'default',
+    },
+    database: {
+      url: process.env.DATABASE_URL || 'postgresql://localhost/dev',
+    },
+    logging: {
+      level: process.env.LOG_LEVEL || 'info',
+    },
+    metrics: {
+      enabled: process.env.METRICS_ENABLED === 'true',
+      port: parseInt(process.env.METRICS_PORT || '9090'),
+    },
+  };
+
+  // Production-specific config
+  if (env === 'production') {
+    if (!process.env.TEMPORAL_CLIENT_CERT_PATH || !process.env.TEMPORAL_CLIENT_KEY_PATH) {
+      throw new Error('TLS certificates required in production');
+    }
+    
+    baseConfig.temporal.tls = {
+      clientCertPath: process.env.TEMPORAL_CLIENT_CERT_PATH,
+      clientKeyPath: process.env.TEMPORAL_CLIENT_KEY_PATH,
+    };
+  }
+
+  return baseConfig;
+}
+
+export const config = loadConfig();
+```
+
+## Monitoring & Observability
+
+### Prometheus Metrics
+
+```typescript
+// metrics.ts
+import { register, Counter, Histogram, Gauge } from 'prom-client';
+
+// Workflow metrics
+export const workflowStarted = new Counter({
+  name: 'temporal_workflow_started_total',
+  help: 'Total workflows started',
+  labelNames: ['workflow_type'],
+});
+
+export const workflowCompleted = new Counter({
+  name: 'temporal_workflow_completed_total',
+  help: 'Total workflows completed',
+  labelNames: ['workflow_type', 'status'],
+});
+
+export const workflowDuration = new Histogram({
+  name: 'temporal_workflow_duration_seconds',
+  help: 'Workflow execution duration',
+  labelNames: ['workflow_type'],
+  buckets: [1, 5, 10, 30, 60, 300, 600, 1800, 3600],
+});
+
+// Activity metrics
+export const activityExecuted = new Counter({
+  name: 'temporal_activity_executed_total',
+  help: 'Total activities executed',
+  labelNames: ['activity_type', 'status'],
+});
+
+export const activityDuration = new Histogram({
+  name: 'temporal_activity_duration_seconds',
+  help: 'Activity execution duration',
+  labelNames: ['activity_type'],
+  buckets: [0.1, 0.5, 1, 2, 5, 10, 30, 60],
+});
+
+// Worker metrics
+export const workerPollers = new Gauge({
+  name: 'temporal_worker_pollers',
+  help: 'Number of active pollers',
+  labelNames: ['task_queue'],
+});
+
+export const workerTasksInFlight = new Gauge({
+  name: 'temporal_worker_tasks_in_flight',
+  help: 'Number of tasks currently executing',
+  labelNames: ['task_queue', 'task_type'],
+});
+
+// Expose metrics endpoint
+import express from 'express';
+
+export function startMetricsServer(port: number) {
+  const app = express();
+  
+  app.get('/metrics', async (req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  });
+  
+  app.listen(port, () => {
+    console.log(`Metrics server listening on port ${port}`);
+  });
+}
+```
+
+### Grafana Dashboard
+
+```json
+{
+  "dashboard": {
+    "title": "Temporal Production Dashboard",
+    "panels": [
+      {
+        "title": "Workflow Execution Rate",
+        "targets": [
+          {
+            "expr": "rate(temporal_workflow_started_total[5m])"
+          }
+        ]
+      },
+      {
+        "title": "Workflow Success Rate",
+        "targets": [
+          {
+            "expr": "rate(temporal_workflow_completed_total{status=\"success\"}[5m]) / rate(temporal_workflow_completed_total[5m])"
+          }
+        ]
+      },
+      {
+        "title": "Activity Duration P95",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(temporal_activity_duration_seconds_bucket[5m]))"
+          }
+        ]
+      },
+      {
+        "title": "Worker Tasks In Flight",
+        "targets": [
+          {
+            "expr": "temporal_worker_tasks_in_flight"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Distributed Tracing
+
+```typescript
+// tracing.ts
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+import { JaegerExporter } from '@opentelemetry/exporter-jaeger';
+import { Resource } from '@opentelemetry/resources';
+import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
+
+export function initializeTracing() {
+  const sdk = new NodeSDK({
+    resource: new Resource({
+      [SemanticResourceAttributes.SERVICE_NAME]: 'temporal-worker',
+      [SemanticResourceAttributes.SERVICE_VERSION]: process.env.VERSION || '1.0.0',
+    }),
+    traceExporter: new JaegerExporter({
+      endpoint: process.env.JAEGER_ENDPOINT || 'http://localhost:14268/api/traces',
+    }),
+    instrumentations: [getNodeAutoInstrumentations()],
+  });
+
+  sdk.start();
+
+  process.on('SIGTERM', () => {
+    sdk.shutdown()
+      .then(() => console.log('Tracing terminated'))
+      .catch((error) => console.error('Error terminating tracing', error))
+      .finally(() => process.exit(0));
+  });
+}
+```
+
+## Security Best Practices
+
+### 1. TLS/mTLS Configuration
+
+```typescript
+// secure-connection.ts
+import { Connection } from '@temporalio/client';
+import fs from 'fs';
+import path from 'path';
+
+export async function createSecureConnection() {
+  const certPath = process.env.CERT_PATH || '/certs';
+  
+  return await Connection.connect({
+    address: process.env.TEMPORAL_ADDRESS,
+    tls: {
+      clientCertPair: {
+        crt: fs.readFileSync(path.join(certPath, 'client.pem')),
+        key: fs.readFileSync(path.join(certPath, 'client-key.pem')),
+      },
+      serverRootCACertificate: fs.readFileSync(path.join(certPath, 'ca.pem')),
+      serverNameOverride: process.env.TEMPORAL_SERVER_NAME,
+    },
+  });
+}
+```
+
+### 2. Secrets Management
+
+```typescript
+// secrets.ts
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+
+const client = new SecretsManagerClient({ region: 'us-east-1' });
+
+export async function getSecret(secretName: string): Promise<string> {
+  const command = new GetSecretValueCommand({ SecretId: secretName });
+  const response = await client.send(command);
+  return response.SecretString!;
+}
+
+// Usage in worker
+async function initializeWorker() {
+  const databaseUrl = await getSecret('production/database-url');
+  const apiKey = await getSecret('production/api-key');
+  
+  // Use secrets...
+}
+```
+
+### 3. Data Encryption
+
+```typescript
+// data-codec.ts
+import { PayloadCodec } from '@temporalio/client';
+import crypto from 'crypto';
+
+export class EncryptionCodec implements PayloadCodec {
+  private key: Buffer;
+  
+  constructor(encryptionKey: string) {
+    this.key = Buffer.from(encryptionKey, 'hex');
+  }
+
+  async encode(payloads: Payload[]): Promise<Payload[]> {
+    return payloads.map((payload) => {
+      const iv = crypto.randomBytes(16);
+      const cipher = crypto.createCipheriv('aes-256-cbc', this.key, iv);
+      
+      const encrypted = Buffer.concat([
+        cipher.update(payload.data),
+        cipher.final(),
+      ]);
+      
+      return {
+        metadata: {
+          encoding: 'binary/encrypted',
+          encryption_iv: iv.toString('base64'),
+        },
+        data: encrypted,
+      };
+    });
+  }
+
+  async decode(payloads: Payload[]): Promise<Payload[]> {
+    return payloads.map((payload) => {
+      if (payload.metadata?.encoding !== 'binary/encrypted') {
+        return payload;
+      }
+      
+      const iv = Buffer.from(payload.metadata.encryption_iv, 'base64');
+      const decipher = crypto.createDecipheriv('aes-256-cbc', this.key, iv);
+      
+      const decrypted = Buffer.concat([
+        decipher.update(payload.data),
+        decipher.final(),
+      ]);
+      
+      return {
+        ...payload,
+        data: decrypted,
+        metadata: { encoding: 'binary/plain' },
+      };
+    });
+  }
+}
+```
+
+## High Availability
+
+### Multi-Region Setup
+
+```yaml
+# Architecture for multi-region HA
+
+Primary Region (us-east-1):
+- Temporal Cluster (Active)
+- PostgreSQL Primary
+- Workers (Active)
+
+Secondary Region (us-west-2):
+- Temporal Cluster (Standby)
+- PostgreSQL Read Replica
+- Workers (Active, different task queues)
+
+Failover Strategy:
+1. Database replication (streaming)
+2. Global load balancer
+3. Automatic DNS failover
+4. Worker redundancy across regions
+```
+
+### Database High Availability
+
+```yaml
+# PostgreSQL HA with Patroni
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-ha
+spec:
+  serviceName: postgres-ha
+  replicas: 3
+  selector:
+    matchLabels:
+      app: postgres-ha
+  template:
+    metadata:
+      labels:
+        app: postgres-ha
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        env:
+        - name: PATRONI_SCOPE
+          value: "temporal"
+        - name: PATRONI_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 100Gi
+```
+
+## Disaster Recovery
+
+### Backup Strategy
+
+```bash
+#!/bin/bash
+# backup-temporal.sh
+
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_DIR="/backups/temporal"
+
+# Backup PostgreSQL
+pg_dump -h $POSTGRES_HOST -U temporal temporal_default > \
+  $BACKUP_DIR/temporal_${TIMESTAMP}.sql
+
+# Backup Elasticsearch (visibility)
+elasticdump \
+  --input=http://elasticsearch:9200/temporal_visibility_v1_default \
+  --output=$BACKUP_DIR/elasticsearch_${TIMESTAMP}.json
+
+# Upload to S3
+aws s3 cp $BACKUP_DIR/ s3://temporal-backups/ --recursive
+
+# Retain backups for 30 days
+find $BACKUP_DIR -name "*.sql" -mtime +30 -delete
+find $BACKUP_DIR -name "*.json" -mtime +30 -delete
+```
+
+### Restore Procedure
+
+```bash
+#!/bin/bash
+# restore-temporal.sh
+
+BACKUP_FILE=$1
+
+# Restore PostgreSQL
+psql -h $POSTGRES_HOST -U temporal temporal_default < $BACKUP_FILE
+
+# Restore Elasticsearch
+elasticdump \
+  --input=$BACKUP_FILE \
+  --output=http://elasticsearch:9200/temporal_visibility_v1_default
+```
+
+## Production Checklist
+
+### Pre-Deployment
+
+- [ ] Load testing completed
+- [ ] Security audit passed
+- [ ] TLS certificates configured
+- [ ] Secrets properly managed
+- [ ] Monitoring dashboards created
+- [ ] Alerting rules configured
+- [ ] Backup strategy implemented
+- [ ] Disaster recovery plan documented
+- [ ] Runbooks created
+- [ ] On-call rotation established
+
+### Post-Deployment
+
+- [ ] Health checks passing
+- [ ] Metrics being collected
+- [ ] Logs centralized
+- [ ] Traces flowing
+- [ ] Alerts firing correctly
+- [ ] Backups running
+- [ ] Documentation updated
+
+## Troubleshooting Production Issues
+
+### Common Issues
+
+| Issue | Symptoms | Solution |
+|-------|----------|----------|
+| High task queue lag | Workflows not starting | Scale up workers |
+| Memory leaks | OOM errors | Review activity implementations |
+| Database connection exhaustion | Connection timeouts | Increase pool size or add replicas |
+| Slow workflow execution | High P99 latency | Optimize activities, check DB performance |
+| Worker crashes | Pods restarting | Check logs, fix bugs, add error handling |
+
+### Debugging Tools
+
+```bash
+# Check worker health
+kubectl logs -n production deployment/temporal-worker --tail=100
+
+# Check Temporal service health
+kubectl logs -n temporal statefulset/temporal-frontend --tail=100
+
+# Query workflow execution
+temporal workflow describe --workflow-id=<id>
+
+# List failed workflows
+temporal workflow list --query='ExecutionStatus="Failed"'
+
+# Show workflow history
+temporal workflow show --workflow-id=<id> --run-id=<run-id>
+```
+
+→ See `temporal-workers.mdc` for worker configuration
+→ See `temporal-overview.mdc` for architecture details
+→ See `temporal-testing.mdc` for pre-deployment testing
+

@@ -23,6 +23,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import anyio
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -363,8 +365,8 @@ async def main_async(concurrency: int, offline: bool):
         if not DB_DUMP_PATH.exists():
             print(f"[error] offline mode but dump file missing: {DB_DUMP_PATH}")
             return
-        with open(DB_DUMP_PATH, encoding="utf-8") as f:
-            local_db = json.load(f)
+        async with await anyio.open_file(DB_DUMP_PATH, encoding="utf-8") as f:
+            local_db = json.loads(await f.read())
         print(f"[batch] OFFLINE mode — loaded {sum(len(v) for v in local_db.values())} rows from dump")
     
     print(f"[batch] {len(ids)} cb_link_ids from Excel")

@@ -10,7 +10,7 @@ output/
 docs/
 tests/
 scripts/
-temporal/
+temporal/tests/
 temporal_skills/
 prompts/
 *.md

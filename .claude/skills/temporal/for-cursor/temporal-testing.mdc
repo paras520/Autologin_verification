@@ -1,0 +1,932 @@
+# Temporal Testing - Complete Implementation Guide
+
+**
+
+## Testing Philosophy
+
+Testing Temporal applications requires a different approach than traditional applications because of the distributed, durable nature of workflows. This guide covers comprehensive testing strategies for all Temporal components.
+
+## Testing Pyramid for Temporal
+
+```
+         ┌─────────────────────┐
+         │   E2E Tests         │  ← Few tests, full integration
+         │   (Production-like) │
+         └─────────────────────┘
+              ┌───────────────────────┐
+              │  Integration Tests    │  ← Workflow + Activities
+              │  (Test Environment)   │
+              └───────────────────────┘
+                   ┌────────────────────────┐
+                   │   Unit Tests           │  ← Many tests, fast
+                   │   (Activities, Logic)  │
+                   └────────────────────────┘
+```
+
+## Unit Testing Activities
+
+### TypeScript Activity Tests
+
+```typescript
+// activities.ts
+export async function sendEmail(to: string, subject: string): Promise<void> {
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+  });
+  
+  await transporter.sendMail({
+    from: 'test@example.com',
+    to,
+    subject,
+  });
+}
+
+// activities.test.ts
+import { sendEmail } from './activities';
+import nodemailer from 'nodemailer';
+
+jest.mock('nodemailer');
+
+describe('sendEmail activity', () => {
+  let mockSendMail: jest.Mock;
+
+  beforeEach(() => {
+    mockSendMail = jest.fn().mockResolvedValue({});
+    (nodemailer.createTransport as jest.Mock).mockReturnValue({
+      sendMail: mockSendMail,
+    });
+  });
+
+  it('sends email with correct parameters', async () => {
+    await sendEmail('user@example.com', 'Test Subject');
+    
+    expect(mockSendMail).toHaveBeenCalledWith({
+      from: 'test@example.com',
+      to: 'user@example.com',
+      subject: 'Test Subject',
+    });
+  });
+
+  it('throws error when email service fails', async () => {
+    mockSendMail.mockRejectedValue(new Error('SMTP error'));
+    
+    await expect(
+      sendEmail('user@example.com', 'Test')
+    ).rejects.toThrow('SMTP error');
+  });
+});
+```
+
+### Python Activity Tests
+
+```python
+# activities.py
+from temporalio import activity
+import httpx
+
+@activity.defn
+async def send_email(to: str, subject: str) -> None:
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            "https://api.email.com/send",
+            json={"to": to, "subject": subject}
+        )
+
+# test_activities.py
+import pytest
+from unittest.mock import AsyncMock, patch
+from activities import send_email
+
+@pytest.mark.asyncio
+async def test_send_email_success():
+    with patch('httpx.AsyncClient') as mock_client:
+        mock_post = AsyncMock()
+        mock_client.return_value.__aenter__.return_value.post = mock_post
+        
+        await send_email("user@example.com", "Test")
+        
+        mock_post.assert_called_once_with(
+            "https://api.email.com/send",
+            json={"to": "user@example.com", "subject": "Test"}
+        )
+
+@pytest.mark.asyncio
+async def test_send_email_failure():
+    with patch('httpx.AsyncClient') as mock_client:
+        mock_post = AsyncMock(side_effect=httpx.HTTPError("API Error"))
+        mock_client.return_value.__aenter__.return_value.post = mock_post
+        
+        with pytest.raises(httpx.HTTPError):
+            await send_email("user@example.com", "Test")
+```
+
+### Go Activity Tests
+
+```go
+// activities_test.go
+package activities
+
+import (
+    "context"
+    "testing"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/mock"
+)
+
+type MockEmailService struct {
+    mock.Mock
+}
+
+func (m *MockEmailService) Send(to, subject string) error {
+    args := m.Called(to, subject)
+    return args.Error(0)
+}
+
+func TestSendEmail(t *testing.T) {
+    mockService := new(MockEmailService)
+    emailService = mockService // Inject mock
+    
+    // Setup expectation
+    mockService.On("Send", "user@example.com", "Test").Return(nil)
+    
+    // Execute
+    err := SendEmail(context.Background(), "user@example.com", "Test")
+    
+    // Assert
+    assert.NoError(t, err)
+    mockService.AssertExpectations(t)
+}
+
+func TestSendEmailFailure(t *testing.T) {
+    mockService := new(MockEmailService)
+    emailService = mockService
+    
+    mockService.On("Send", "user@example.com", "Test").
+        Return(errors.New("SMTP error"))
+    
+    err := SendEmail(context.Background(), "user@example.com", "Test")
+    
+    assert.Error(t, err)
+    assert.Contains(t, err.Error(), "SMTP error")
+}
+```
+
+## Integration Testing Workflows
+
+### TypeScript Workflow Integration Tests
+
+```typescript
+// workflows.test.ts
+import { TestWorkflowEnvironment } from '@temporalio/testing';
+import { Worker } from '@temporalio/worker';
+import { orderWorkflow } from './workflows';
+import * as activities from './activities';
+
+describe('Order Workflow Integration Tests', () => {
+  let testEnv: TestWorkflowEnvironment;
+
+  beforeAll(async () => {
+    testEnv = await TestWorkflowEnvironment.createLocal();
+  });
+
+  afterAll(async () => {
+    await testEnv?.teardown();
+  });
+
+  it('completes order successfully', async () => {
+    const { client, nativeConnection } = testEnv;
+    
+    // Create worker
+    const worker = await Worker.create({
+      connection: nativeConnection,
+      taskQueue: 'test',
+      workflowsPath: require.resolve('./workflows'),
+      activities,
+    });
+
+    // Run workflow in test environment
+    await worker.runUntil(async () => {
+      const result = await client.workflow.execute(orderWorkflow, {
+        args: ['order-123'],
+        workflowId: 'test-order-123',
+        taskQueue: 'test',
+      });
+      
+      expect(result).toBe('Order completed');
+    });
+  });
+
+  it('handles payment failure', async () => {
+    const { client, nativeConnection } = testEnv;
+    
+    // Mock activity to fail
+    const mockActivities = {
+      ...activities,
+      processPayment: async () => {
+        throw new Error('Payment declined');
+      },
+    };
+
+    const worker = await Worker.create({
+      connection: nativeConnection,
+      taskQueue: 'test',
+      workflowsPath: require.resolve('./workflows'),
+      activities: mockActivities,
+    });
+
+    await worker.runUntil(async () => {
+      await expect(
+        client.workflow.execute(orderWorkflow, {
+          args: ['order-456'],
+          workflowId: 'test-order-456',
+          taskQueue: 'test',
+        })
+      ).rejects.toThrow('Payment declined');
+    });
+  });
+
+  it('retries failed activities', async () => {
+    const { client, nativeConnection } = testEnv;
+    
+    let attempts = 0;
+    const mockActivities = {
+      ...activities,
+      processPayment: async () => {
+        attempts++;
+        if (attempts < 3) {
+          throw new Error('Temporary failure');
+        }
+        return { transactionId: 'tx-123', 
+      },
+    };
+
+    const worker = await Worker.create({
+      connection: nativeConnection,
+      taskQueue: 'test',
+      workflowsPath: require.resolve('./workflows'),
+      activities: mockActivities,
+    });
+
+    await worker.runUntil(async () => {
+      const result = await client.workflow.execute(orderWorkflow, {
+        args: ['order-789'],
+        workflowId: 'test-order-789',
+        taskQueue: 'test',
+      });
+      
+      expect(result).toBe('Order completed');
+      expect(attempts).toBe(3); // Verify retries happened
+    });
+  });
+});
+```
+
+### Python Workflow Integration Tests
+
+```python
+# test_workflows.py
+import pytest
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker
+from workflows import OrderWorkflow
+from activities import process_payment, send_confirmation
+
+@pytest.mark.asyncio
+async def test_order_workflow_success():
+    async with await WorkflowEnvironment.start_local() as env:
+        async with Worker(
+            env.client,
+            task_queue="test",
+            workflows=[OrderWorkflow],
+            activities=[process_payment, send_confirmation],
+        ):
+            result = await env.client.execute_workflow(
+                OrderWorkflow.run,
+                "order-123",
+                id="test-order-123",
+                task_queue="test",
+            )
+            
+            assert result == "Order completed"
+
+@pytest.mark.asyncio
+async def test_order_workflow_payment_failure():
+    # Mock activity that fails
+    async def mock_process_payment(order_id: str):
+        raise Exception("Payment declined")
+    
+    async with await WorkflowEnvironment.start_local() as env:
+        async with Worker(
+            env.client,
+            task_queue="test",
+            workflows=[OrderWorkflow],
+            activities=[mock_process_payment, send_confirmation],
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await env.client.execute_workflow(
+                    OrderWorkflow.run,
+                    "order-456",
+                    id="test-order-456",
+                    task_queue="test",
+                )
+            
+            assert "Payment declined" in str(exc_info.value)
+```
+
+### Go Workflow Integration Tests
+
+```go
+// workflows_test.go
+package workflows
+
+import (
+    "testing"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/mock"
+    "go.temporal.io/sdk/testsuite"
+)
+
+type WorkflowTestSuite struct {
+    testsuite.WorkflowTestSuite
+}
+
+func TestOrderWorkflow(t *testing.T) {
+    suite := &WorkflowTestSuite{}
+    suite.SetLogger(t)
+    env := suite.NewTestWorkflowEnvironment()
+    
+    // Mock activities
+    env.OnActivity(ProcessPayment, mock.Anything, "order-123").
+        Return(PaymentResult{TransactionID: "tx-123", 
+    env.OnActivity(SendConfirmation, mock.Anything, "order-123", "tx-123").
+        Return(nil)
+    
+    // Execute workflow
+    env.ExecuteWorkflow(OrderWorkflow, "order-123")
+    
+    // Assertions
+    assert.True(t, env.IsWorkflowCompleted())
+    assert.NoError(t, env.GetWorkflowError())
+    
+    var result string
+    env.GetWorkflowResult(&result)
+    assert.Equal(t, "Order completed", result)
+}
+
+func TestOrderWorkflowPaymentFailure(t *testing.T) {
+    suite := &WorkflowTestSuite{}
+    env := suite.NewTestWorkflowEnvironment()
+    
+    // Mock payment failure
+    env.OnActivity(ProcessPayment, mock.Anything, "order-456").
+        Return(PaymentResult{}, errors.New("Payment declined"))
+    
+    env.ExecuteWorkflow(OrderWorkflow, "order-456")
+    
+    assert.True(t, env.IsWorkflowCompleted())
+    assert.Error(t, env.GetWorkflowError())
+}
+```
+
+## Testing Workflow Features
+
+### Testing Signals
+
+```typescript
+// TypeScript Example
+it('handles approval signal', async () => {
+  const { client, nativeConnection } = testEnv;
+  
+  const worker = await Worker.create({
+    connection: nativeConnection,
+    taskQueue: 'test',
+    workflowsPath: require.resolve('./workflows'),
+    activities,
+  });
+
+  await worker.runUntil(async () => {
+    // Start workflow
+    const handle = await client.workflow.start(approvalWorkflow, {
+      args: ['request-123'],
+      workflowId: 'test-approval-123',
+      taskQueue: 'test',
+    });
+    
+    // Wait a bit
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Send approval signal
+    await handle.signal('approve', 'John Doe');
+    
+    // Wait for completion
+    const result = await handle.result();
+    expect(result).toBe('Approved');
+  });
+});
+```
+
+```python
+# Python Example
+@pytest.mark.asyncio
+async def test_approval_workflow_with_signal():
+    async with await WorkflowEnvironment.start_local() as env:
+        async with Worker(
+            env.client,
+            task_queue="test",
+            workflows=[ApprovalWorkflow],
+            activities=[process_approval],
+        ):
+            # Start workflow
+            handle = await env.client.start_workflow(
+                ApprovalWorkflow.run,
+                "request-123",
+                id="test-approval-123",
+                task_queue="test",
+            )
+            
+            # Send signal
+            await handle.signal("approve", "John Doe")
+            
+            # Wait for result
+            result = await handle.result()
+            assert result == "Approved"
+```
+
+### Testing Queries
+
+```typescript
+// TypeScript Example
+it('queries workflow status', async () => {
+  const { client, nativeConnection } = testEnv;
+  
+  const worker = await Worker.create({
+    connection: nativeConnection,
+    taskQueue: 'test',
+    workflowsPath: require.resolve('./workflows'),
+    activities,
+  });
+
+  await worker.runUntil(async () => {
+    const handle = await client.workflow.start(approvalWorkflow, {
+      args: ['request-123'],
+      workflowId: 'test-query-123',
+      taskQueue: 'test',
+    });
+    
+    // Query status
+    const status = await handle.query('status');
+    expect(status).toBe('pending');
+    
+    // Send approval
+    await handle.signal('approve', 'Jane');
+    
+    // Query again
+    const newStatus = await handle.query('status');
+    expect(newStatus).toBe('approved');
+    
+    await handle.result();
+  });
+});
+```
+
+### Testing Timers
+
+```typescript
+// TypeScript Example
+it('handles timeout', async () => {
+  const { client, nativeConnection } = testEnv;
+  
+  const worker = await Worker.create({
+    connection: nativeConnection,
+    taskQueue: 'test',
+    workflowsPath: require.resolve('./workflows'),
+    activities,
+  });
+
+  await worker.runUntil(async () => {
+    // Skip time in test environment
+    testEnv.sleep('8 days'); // Skip past 7-day timeout
+    
+    const result = await client.workflow.execute(approvalWorkflow, {
+      args: ['request-timeout'],
+      workflowId: 'test-timeout',
+      taskQueue: 'test',
+    });
+    
+    expect(result).toBe('Request timeout');
+  });
+});
+```
+
+### Testing Child Workflows
+
+```typescript
+// TypeScript Example
+it('executes child workflows', async () => {
+  const { client, nativeConnection } = testEnv;
+  
+  const worker = await Worker.create({
+    connection: nativeConnection,
+    taskQueue: 'test',
+    workflowsPath: require.resolve('./workflows'),
+    activities,
+  });
+
+  await worker.runUntil(async () => {
+    const result = await client.workflow.execute(orderFulfillmentWorkflow, {
+      args: ['order-123'],
+      workflowId: 'test-parent',
+      taskQueue: 'test',
+    });
+    
+    expect(result).toContain('Order fulfilled');
+    
+    // Verify child workflows were created
+    const childWorkflows = await client.workflow.list({
+      query: `WorkflowId STARTS_WITH "payment-order-123"`,
+    });
+    expect(childWorkflows.workflows).toHaveLength(1);
+  });
+});
+```
+
+## Testing Error Handling
+
+### Testing Retries
+
+```typescript
+// TypeScript Example
+it('retries activity with exponential backoff', async () => {
+  const { client, nativeConnection } = testEnv;
+  
+  let attempts = 0;
+  const mockActivities = {
+    unstableActivity: async () => {
+      attempts++;
+      if (attempts < 4) {
+        throw new Error('Temporary failure');
+      }
+      return 'success';
+    },
+  };
+
+  const worker = await Worker.create({
+    connection: nativeConnection,
+    taskQueue: 'test',
+    workflowsPath: require.resolve('./workflows'),
+    activities: mockActivities,
+  });
+
+  await worker.runUntil(async () => {
+    const result = await client.workflow.execute(retryTestWorkflow, {
+      args: [],
+      workflowId: 'test-retry',
+      taskQueue: 'test',
+    });
+    
+    expect(result).toBe('success');
+    expect(attempts).toBe(4);
+  });
+});
+```
+
+### Testing Non-Retryable Errors
+
+```typescript
+// TypeScript Example
+it('does not retry non-retryable errors', async () => {
+  const { client, nativeConnection } = testEnv;
+  
+  let attempts = 0;
+  const mockActivities = {
+    validateInput: async (input: string) => {
+      attempts++;
+      throw ApplicationFailure.nonRetryable('Invalid input', 'ValidationError');
+    },
+  };
+
+  const worker = await Worker.create({
+    connection: nativeConnection,
+    taskQueue: 'test',
+    workflowsPath: require.resolve('./workflows'),
+    activities: mockActivities,
+  });
+
+  await worker.runUntil(async () => {
+    await expect(
+      client.workflow.execute(validationWorkflow, {
+        args: ['bad-input'],
+        workflowId: 'test-validation',
+        taskQueue: 'test',
+      })
+    ).rejects.toThrow('Invalid input');
+    
+    expect(attempts).toBe(1); // Only tried once
+  });
+});
+```
+
+## Testing Patterns
+
+### Test Data Builders
+
+```typescript
+// test-helpers.ts
+export class OrderBuilder {
+  private order = {
+    id: 'order-123',
+    customerId: 'customer-456',
+    items: [],
+    total: 0,
+  };
+
+  withId(id: string): this {
+    this.order.id = id;
+    return this;
+  }
+
+  withCustomer(customerId: string): this {
+    this.order.customerId = customerId;
+    return this;
+  }
+
+  withItems(items: any[]): this {
+    this.order.items = items;
+    this.order.total = items.reduce((sum, item) => sum + item.price, 0);
+    return this;
+  }
+
+  build() {
+    return this.order;
+  }
+}
+
+// Usage in tests
+it('processes order with multiple items', async () => {
+  const order = new OrderBuilder()
+    .withId('order-789')
+    .withCustomer('customer-999')
+    .withItems([
+      { name: 'Item 1', price: 10 },
+      { name: 'Item 2', price: 20 },
+    ])
+    .build();
+
+  const result = await processOrder(order);
+  expect(result.total).toBe(30);
+});
+```
+
+### Mock Helpers
+
+```typescript
+// mock-helpers.ts
+export function createMockActivities(overrides = {}) {
+  return {
+    processPayment: jest.fn().mockResolvedValue({
+      transactionId: 'tx-123',
+      
+    }),
+    sendEmail: jest.fn().mockResolvedValue(undefined),
+    updateInventory: jest.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+// Usage
+it('handles payment failure gracefully', async () => {
+  const activities = createMockActivities({
+    processPayment: jest.fn().mockRejectedValue(new Error('Declined')),
+  });
+  
+  // Test with mocked activities
+});
+```
+
+### Time Manipulation
+
+```typescript
+// TypeScript Example
+it('handles scheduled workflows', async () => {
+  const { client, nativeConnection } = testEnv;
+  
+  const worker = await Worker.create({
+    connection: nativeConnection,
+    taskQueue: 'test',
+    workflowsPath: require.resolve('./workflows'),
+    activities,
+  });
+
+  await worker.runUntil(async () => {
+    // Start workflow scheduled for future
+    const handle = await client.workflow.start(scheduledWorkflow, {
+      args: [],
+      workflowId: 'test-scheduled',
+      taskQueue: 'test',
+    });
+    
+    // Skip ahead in time
+    await testEnv.sleep('1 day');
+    
+    // Verify workflow executed
+    const result = await handle.result();
+    expect(result).toBe('Scheduled task completed');
+  });
+});
+```
+
+## Performance Testing
+
+### Load Testing Workflows
+
+```typescript
+// load-test.ts
+import { Connection, WorkflowClient } from '@temporalio/client';
+
+async function loadTest() {
+  const connection = await Connection.connect();
+  const client = new WorkflowClient({ connection });
+
+  const concurrentWorkflows = 100;
+  const iterations = 10;
+  
+  console.log(`Starting load test: ${concurrentWorkflows * iterations} workflows`);
+  
+  const startTime = Date.now();
+
+  for (let i = 0; i < iterations; i++) {
+    const batch = [];
+    
+    for (let j = 0; j < concurrentWorkflows; j++) {
+      const workflowId = `load-test-${i}-${j}`;
+      batch.push(
+        client.start(orderWorkflow, {
+          args: [workflowId],
+          taskQueue: 'load-test',
+          workflowId,
+        })
+      );
+    }
+    
+    await Promise.all(batch);
+    console.log(`Started batch ${i + 1}/${iterations}`);
+  }
+
+  const duration = Date.now() - startTime;
+  const throughput = (concurrentWorkflows * iterations) / (duration / 1000);
+  
+  console.log(`Load test completed:`);
+  console.log(`  Total time: ${duration}ms`);
+  console.log(`  Throughput: ${throughput.toFixed(2)} workflows/sec`);
+}
+
+loadTest().catch(console.error);
+```
+
+### Benchmarking Activities
+
+```typescript
+// benchmark-activities.ts
+import { performance } from 'perf_hooks';
+
+async function benchmarkActivity(activity: Function, iterations: number) {
+  const times: number[] = [];
+  
+  for (let i = 0; i < iterations; i++) {
+    const start = performance.now();
+    await activity();
+    const end = performance.now();
+    times.push(end - start);
+  }
+  
+  const avg = times.reduce((a, b) => a + b, 0) / times.length;
+  const min = Math.min(...times);
+  const max = Math.max(...times);
+  
+  console.log(`Benchmark results (${iterations} iterations):`);
+  console.log(`  Average: ${avg.toFixed(2)}ms`);
+  console.log(`  Min: ${min.toFixed(2)}ms`);
+  console.log(`  Max: ${max.toFixed(2)}ms`);
+  
+  return { avg, min, max };
+}
+```
+
+## End-to-End Testing
+
+```typescript
+// e2e-test.ts
+describe('Order Processing E2E', () => {
+  let temporalConnection: Connection;
+  let client: WorkflowClient;
+  let worker: Worker;
+
+  beforeAll(async () => {
+    // Connect to real Temporal instance (test environment)
+    temporalConnection = await Connection.connect({
+      address: process.env.TEMPORAL_ADDRESS || 'localhost:7233',
+    });
+    
+    client = new WorkflowClient({ connection: temporalConnection });
+    
+    // Start worker
+    worker = await Worker.create({
+      connection: temporalConnection,
+      taskQueue: 'e2e-test',
+      workflowsPath: require.resolve('./workflows'),
+      activities: realActivities, // Use real implementations
+    });
+    
+    await worker.run();
+  });
+
+  afterAll(async () => {
+    worker?.shutdown();
+    await temporalConnection?.close();
+  });
+
+  it('completes full order flow', async () => {
+    // Create test order in database
+    const orderId = await createTestOrder();
+    
+    // Start workflow
+    const handle = await client.start(orderWorkflow, {
+      args: [orderId],
+      taskQueue: 'e2e-test',
+      workflowId: `e2e-order-${orderId}`,
+    });
+    
+    // Wait for completion
+    const result = await handle.result();
+    
+    // Verify side effects
+    const order = await database.orders.findOne({ id: orderId });
+    expect(order.status).toBe('completed');
+    
+    const emails = await emailService.getSent();
+    expect(emails).toHaveLength(1);
+    expect(emails[0].to).toBe(order.customerEmail);
+  }, 30000); // 30 second timeout
+});
+```
+
+## Best Practices
+
+### ✅ DO
+
+1. **Test at Multiple Levels**
+   - Unit tests for activities
+   - Integration tests for workflows
+   - E2E tests for critical flows
+
+2. **Use Test Helpers**
+   - Create reusable mock factories
+   - Build test data builders
+   - Abstract common setup
+
+3. **Test Error Scenarios**
+   - Activity failures
+   - Timeouts
+   - Non-retryable errors
+
+4. **Time Travel in Tests**
+   - Use `testEnv.sleep()` to skip time
+   - Test long-running workflows quickly
+
+5. **Verify Side Effects**
+   - Check database state
+   - Verify external API calls
+   - Confirm emails sent
+
+### ❌ DON'T
+
+1. **Don't Test with Production Data**
+   - Use test databases
+   - Mock external services
+
+2. **Don't Skip Integration Tests**
+   - Unit tests alone insufficient
+   - Workflow behavior matters
+
+3. **Don't Forget Cleanup**
+   - Close connections
+   - Clear test data
+
+4. **Don't Ignore Timeouts**
+   - Set reasonable test timeouts
+   - Long-running tests indicate issues
+
+## Coverage Goals
+
+```
+Target Coverage:
+- Activities: 90%+
+- Workflows: 85%+
+- Integration: Critical paths
+- E2E: Happy path + major errors
+```
+
+→ See `temporal-workflows.mdc` for workflow patterns to test
+→ See `temporal-activities.mdc` for activity patterns to test
+→ See `temporal-error-handling.mdc` for error scenarios to cover
+

@@ -211,7 +211,7 @@ async def _raw_http_check(url: str) -> str | None:
     """
     try:
         async with httpx.AsyncClient(
-            timeout=10.0, follow_redirects=True, verify=False
+            timeout=10.0, follow_redirects=True
         ) as client:
             resp = await client.get(url, headers=_HTTPX_BROWSER_HEADERS)
             if 200 <= resp.status_code < 400:

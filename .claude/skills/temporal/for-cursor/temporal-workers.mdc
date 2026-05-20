@@ -1,0 +1,909 @@
+# Temporal Workers - Complete Implementation Guide
+
+**
+
+## What is a Worker?
+
+A **Worker** is a service that polls Temporal for tasks and executes your workflow and activity code. Workers are the runtime engines that bring your Temporal application to life.
+
+### Key Characteristics
+
+✅ **Stateless**: Can be scaled horizontally
+✅ **Task Queue Specific**: Poll specific task queues
+✅ **Language-Specific**: Each SDK has its own worker implementation
+✅ **Self-Contained**: Include all workflow and activity code
+✅ **Fault-Tolerant**: Automatically reconnect on failures
+
+## Worker Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Temporal Service                          │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │ Task Queue 1 │  │ Task Queue 2 │  │ Task Queue 3 │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+         ↓                    ↓                    ↓
+    [Poll Tasks]         [Poll Tasks]         [Poll Tasks]
+         ↓                    ↓                    ↓
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│   Worker Pool 1  │  │   Worker Pool 2  │  │   Worker Pool 3  │
+│  ┌────────────┐  │  │  ┌────────────┐  │  │  ┌────────────┐  │
+│  │ Worker 1   │  │  │  │ Worker 1   │  │  │  │ Worker 1   │  │
+│  ├────────────┤  │  │  ├────────────┤  │  │  ├────────────┤  │
+│  │ Worker 2   │  │  │  │ Worker 2   │  │  │  │ Worker 2   │  │
+│  ├────────────┤  │  │  └────────────┘  │  │  └────────────┘  │
+│  │ Worker 3   │  │  │                  │  │                  │
+│  └────────────┘  │  │  General Queue   │  │  Priority Queue  │
+│                  │  │                  │  │                  │
+│  API Queue       │  └──────────────────┘  └──────────────────┘
+└──────────────────┘
+```
+
+## Basic Worker Implementation
+
+### TypeScript Worker
+
+```typescript
+// worker.ts
+import { Worker, NativeConnection } from '@temporalio/worker';
+import * as activities from './activities';
+
+async function run() {
+  // Create connection to Temporal server
+  const connection = await NativeConnection.connect({
+    address: 'localhost:7233',
+  });
+
+  // Create worker
+  const worker = await Worker.create({
+    connection,
+    namespace: 'default',
+    taskQueue: 'my-task-queue',
+    
+    // Register workflows
+    workflowsPath: require.resolve('./workflows'),
+    
+    // Register activities
+    activities,
+    
+    // Worker options
+    maxConcurrentActivityTaskExecutions: 100,
+    maxConcurrentWorkflowTaskExecutions: 50,
+  });
+
+  // Start worker
+  await worker.run();
+  
+  console.log('Worker started successfully');
+}
+
+run().catch((err) => {
+  console.error('Worker failed:', err);
+  process.exit(1);
+});
+```
+
+### Python Worker
+
+```python
+# worker.py
+import asyncio
+from temporalio.client import Client
+from temporalio.worker import Worker
+
+# Import workflows and activities
+from workflows import MyWorkflow
+from activities import my_activity
+
+async def main():
+    # Create client connection
+    client = await Client.connect("localhost:7233")
+    
+    # Create and run worker
+    worker = Worker(
+        client,
+        task_queue="my-task-queue",
+        workflows=[MyWorkflow],
+        activities=[my_activity],
+        max_concurrent_activities=100,
+        max_concurrent_workflow_tasks=50,
+    )
+    
+    print("Worker started successfully")
+    await worker.run()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Go Worker
+
+```go
+// worker.go
+package main
+
+import (
+    "log"
+    "go.temporal.io/sdk/client"
+    "go.temporal.io/sdk/worker"
+)
+
+func main() {
+    // Create Temporal client
+    c, err := client.Dial(client.Options{
+        HostPort: "localhost:7233",
+    })
+    if err != nil {
+        log.Fatalln("Unable to create client", err)
+    }
+    defer c.Close()
+
+    // Create worker
+    w := worker.New(c, "my-task-queue", worker.Options{
+        MaxConcurrentActivityExecutionSize:      100,
+        MaxConcurrentWorkflowTaskExecutionSize:  50,
+    })
+
+    // Register workflows
+    w.RegisterWorkflow(MyWorkflow)
+    
+    // Register activities
+    w.RegisterActivity(MyActivity)
+
+    // Start worker
+    log.Println("Worker started successfully")
+    err = w.Run(worker.InterruptCh())
+    if err != nil {
+        log.Fatalln("Unable to start worker", err)
+    }
+}
+```
+
+### Java Worker
+
+```java
+// Worker.java
+import io.temporal.client.WorkflowClient;
+import io.temporal.serviceclient.WorkflowServiceStubs;
+import io.temporal.worker.Worker;
+import io.temporal.worker.WorkerFactory;
+
+public class MyWorker {
+    public static void main(String[] args) {
+        // Create service stubs
+        WorkflowServiceStubs service = WorkflowServiceStubs.newLocalServiceStubs();
+        
+        // Create client
+        WorkflowClient client = WorkflowClient.newInstance(service);
+        
+        // Create worker factory
+        WorkerFactory factory = WorkerFactory.newInstance(client);
+        
+        // Create worker
+        Worker worker = factory.newWorker("my-task-queue");
+        
+        // Register workflows
+        worker.registerWorkflowImplementationTypes(MyWorkflowImpl.class);
+        
+        // Register activities
+        worker.registerActivitiesImplementations(new MyActivitiesImpl());
+        
+        // Start worker
+        factory.start();
+        System.out.println("Worker started successfully");
+    }
+}
+```
+
+## Worker Configuration Patterns
+
+### Pattern 1: Multiple Task Queues
+
+**Use Case**: Different workers for different workloads
+
+```typescript
+// TypeScript Example
+async function runWorkers() {
+  const connection = await NativeConnection.connect({
+    address: 'localhost:7233',
+  });
+
+  // Worker 1: API-related workflows
+  const apiWorker = await Worker.create({
+    connection,
+    taskQueue: 'api-queue',
+    workflowsPath: require.resolve('./workflows/api'),
+    activities: apiActivities,
+    maxConcurrentActivityTaskExecutions: 50,
+  });
+
+  // Worker 2: Background jobs
+  const backgroundWorker = await Worker.create({
+    connection,
+    taskQueue: 'background-queue',
+    workflowsPath: require.resolve('./workflows/background'),
+    activities: backgroundActivities,
+    maxConcurrentActivityTaskExecutions: 200,
+  });
+
+  // Worker 3: High-priority tasks
+  const priorityWorker = await Worker.create({
+    connection,
+    taskQueue: 'priority-queue',
+    workflowsPath: require.resolve('./workflows/priority'),
+    activities: priorityActivities,
+    maxConcurrentActivityTaskExecutions: 10,
+  });
+
+  // Run all workers concurrently
+  await Promise.all([
+    apiWorker.run(),
+    backgroundWorker.run(),
+    priorityWorker.run(),
+  ]);
+}
+```
+
+### Pattern 2: Graceful Shutdown
+
+**Use Case**: Clean worker termination
+
+```typescript
+// TypeScript Example
+import { Worker } from '@temporalio/worker';
+
+async function run() {
+  const worker = await Worker.create({
+    // ... configuration
+  });
+
+  // Handle shutdown signals
+  const shutdownSignals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGUSR2'];
+  
+  shutdownSignals.forEach((signal) => {
+    process.once(signal, async () => {
+      console.log(`Received ${signal}, shutting down gracefully...`);
+      
+      // Stop accepting new tasks
+      worker.shutdown();
+      
+      // Wait for ongoing tasks to complete (with timeout)
+      const shutdownTimeout = setTimeout(() => {
+        console.log('Shutdown timeout, forcing exit');
+        process.exit(1);
+      }, 30000); // 30 second timeout
+      
+      await worker.shutdown();
+      clearTimeout(shutdownTimeout);
+      
+      console.log('Worker shut down gracefully');
+      process.exit(0);
+    });
+  });
+
+  await worker.run();
+}
+```
+
+```go
+// Go Example
+import (
+    "os"
+    "os/signal"
+    "syscall"
+)
+
+func main() {
+    // Create worker
+    w := worker.New(c, "my-task-queue", worker.Options{})
+    
+    // Register workflows and activities
+    w.RegisterWorkflow(MyWorkflow)
+    w.RegisterActivity(MyActivity)
+
+    // Handle shutdown
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+    
+    go func() {
+        <-sigChan
+        log.Println("Received shutdown signal, stopping worker...")
+        w.Stop()
+    }()
+
+    // Start worker
+    log.Println("Worker started")
+    err := w.Run(worker.InterruptCh())
+    if err != nil {
+        log.Fatalln("Worker error:", err)
+    }
+    
+    log.Println("Worker stopped gracefully")
+}
+```
+
+### Pattern 3: Worker with Health Checks
+
+**Use Case**: Kubernetes/Docker deployments
+
+```typescript
+// TypeScript Example
+import express from 'express';
+import { Worker } from '@temporalio/worker';
+
+async function run() {
+  const worker = await Worker.create({
+    // ... configuration
+  });
+
+  // Create HTTP server for health checks
+  const app = express();
+  let isHealthy = false;
+
+  app.get('/health', (req, res) => {
+    if (isHealthy) {
+      res.status(200).json({ 
+    } else {
+      res.status(503).json({ 
+    }
+  });
+
+  app.get('/ready', (req, res) => {
+    if (isHealthy && worker.getState() === 'RUNNING') {
+      res.status(200).json({ 
+    } else {
+      res.status(503).json({ 
+    }
+  });
+
+  const server = app.listen(8080, () => {
+    console.log('Health check server listening on port 8080');
+  });
+
+  // Start worker
+  worker.run().then(() => {
+    isHealthy = true;
+  }).catch((err) => {
+    console.error('Worker failed:', err);
+    isHealthy = false;
+    server.close();
+    process.exit(1);
+  });
+}
+```
+
+```python
+# Python Example
+from aiohttp import web
+from temporalio.client import Client
+from temporalio.worker import Worker
+
+async def health_check(request):
+    if worker_healthy:
+        return web.json_response({"status": "healthy"}, status=200)
+    return web.json_response({"status": "unhealthy"}, status=503)
+
+async def readiness_check(request):
+    if worker_healthy and worker_running:
+        return web.json_response({"status": "ready"}, status=200)
+    return web.json_response({"status": "not ready"}, status=503)
+
+async def main():
+    global worker_healthy, worker_running
+    
+    # Setup health check server
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    app.router.add_get('/ready', readiness_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, 'localhost', 8080)
+    await site.start()
+    
+    # Create and run worker
+    client = await Client.connect("localhost:7233")
+    worker = Worker(
+        client,
+        task_queue="my-task-queue",
+        workflows=[MyWorkflow],
+        activities=[my_activity],
+    )
+    
+    worker_healthy = True
+    worker_running = True
+    
+    try:
+        await worker.run()
+    except Exception as e:
+        print(f"Worker failed: {e}")
+        worker_healthy = False
+        worker_running = False
+```
+
+### Pattern 4: Activity-Only Worker
+
+**Use Case**: Separate activity execution from workflow execution
+
+```typescript
+// TypeScript Example
+const activityOnlyWorker = await Worker.create({
+  connection,
+  taskQueue: 'activity-queue',
+  
+  // Only activities, no workflows
+  activities: heavyActivities,
+  
+  // Higher concurrency for activities
+  maxConcurrentActivityTaskExecutions: 500,
+  
+  // No workflow execution
+  maxConcurrentWorkflowTaskExecutions: 0,
+});
+```
+
+### Pattern 5: Workflow-Only Worker
+
+**Use Case**: Dedicated workflow orchestration
+
+```typescript
+// TypeScript Example
+const workflowOnlyWorker = await Worker.create({
+  connection,
+  taskQueue: 'workflow-queue',
+  
+  // Only workflows
+  workflowsPath: require.resolve('./workflows'),
+  
+  // No activities
+  activities: {},
+  
+  // Focus on workflow execution
+  maxConcurrentWorkflowTaskExecutions: 100,
+  maxConcurrentActivityTaskExecutions: 0,
+});
+```
+
+### Pattern 6: Worker with Session
+
+**Use Case**: File operations with resource affinity
+
+```typescript
+// TypeScript Example
+const worker = await Worker.create({
+  connection,
+  taskQueue: 'file-processing',
+  workflowsPath: require.resolve('./workflows'),
+  activities,
+  
+  // Enable sessions for resource affinity
+  enableNonLocalActivities: false,
+  maxConcurrentActivityTaskExecutions: 10,
+  maxConcurrentActivityTaskPollers: 5,
+  
+  // Session configuration
+  maxConcurrentSessionExecutionSize: 1000,
+});
+```
+
+### Pattern 7: Worker with Custom Metrics
+
+**Use Case**: Monitoring and observability
+
+```typescript
+// TypeScript Example
+import { Worker } from '@temporalio/worker';
+import { PrometheusMetricsExporter } from '@opentelemetry/exporter-prometheus';
+import { MeterProvider } from '@opentelemetry/sdk-metrics';
+
+// Setup metrics
+const exporter = new PrometheusMetricsExporter({ port: 9090 });
+const meterProvider = new MeterProvider();
+meterProvider.addMetricReader(exporter);
+
+const worker = await Worker.create({
+  connection,
+  taskQueue: 'monitored-queue',
+  workflowsPath: require.resolve('./workflows'),
+  activities,
+  
+  // Enable telemetry
+  enableSDKTracing: true,
+  
+  // Custom interceptors for metrics
+  interceptors: {
+    activityInbound: [(ctx, next) => {
+      const startTime = Date.now();
+      return next(ctx).finally(() => {
+        const duration = Date.now() - startTime;
+        // Record custom metric
+        recordActivityDuration(ctx.activityType, duration);
+      });
+    }],
+  },
+});
+```
+
+## Worker Deployment Patterns
+
+### Pattern 1: Docker Container
+
+```dockerfile
+# Dockerfile
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+RUN npm ci --production
+
+# Copy application code
+COPY . .
+
+# Build TypeScript
+RUN npm run build
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1))"
+
+# Run worker
+CMD ["node", "dist/worker.js"]
+```
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  temporal-worker:
+    build: .
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_NAMESPACE=default
+      - TASK_QUEUE=my-queue
+    restart: unless-stopped
+    depends_on:
+      - temporal
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+```
+
+### Pattern 2: Kubernetes Deployment
+
+```yaml
+# k8s-worker-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal-worker
+  labels:
+    app: temporal-worker
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: temporal-worker
+  template:
+    metadata:
+      labels:
+        app: temporal-worker
+    spec:
+      containers:
+      - name: worker
+        image: myregistry/temporal-worker:latest
+        env:
+        - name: TEMPORAL_ADDRESS
+          value: "temporal.default.svc.cluster.local:7233"
+        - name: TEMPORAL_NAMESPACE
+          value: "default"
+        - name: TASK_QUEUE
+          value: "my-queue"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal-worker
+spec:
+  selector:
+    app: temporal-worker
+  ports:
+  - port: 8080
+    targetPort: 8080
+```
+
+### Pattern 3: Auto-Scaling Workers
+
+```yaml
+# k8s-hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: temporal-worker-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: temporal-worker
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+```
+
+### Pattern 4: Serverless Workers (AWS Lambda)
+
+```typescript
+// lambda-worker.ts
+import { Worker } from '@temporalio/worker';
+
+// Cold start optimization
+let worker: Worker | null = null;
+
+export const handler = async (event: any) => {
+  if (!worker) {
+    worker = await Worker.create({
+      connection: await NativeConnection.connect({
+        address: process.env.TEMPORAL_ADDRESS,
+      }),
+      taskQueue: process.env.TASK_QUEUE,
+      workflowsPath: require.resolve('./workflows'),
+      activities,
+    });
+  }
+
+  // Process for duration of Lambda
+  const timeout = setTimeout(() => {
+    worker?.shutdown();
+  }, 14 * 60 * 1000); // 14 minutes (Lambda max is 15)
+
+  await worker.run();
+  clearTimeout(timeout);
+
+  return { statusCode: 200 };
+};
+```
+
+## Worker Configuration Reference
+
+### TypeScript Worker Options
+
+```typescript
+interface WorkerOptions {
+  // Connection
+  connection: NativeConnection;
+  namespace?: string;
+  taskQueue: string;
+
+  // Workflows
+  workflowsPath?: string;
+  workflowBundle?: WorkflowBundle;
+
+  // Activities
+  activities?: ActivityInterface;
+
+  // Concurrency
+  maxConcurrentActivityTaskExecutions?: number;      // Default: 100
+  maxConcurrentWorkflowTaskExecutions?: number;      // Default: 100
+  maxConcurrentActivityTaskPolls?: number;           // Default: 5
+  maxConcurrentWorkflowTaskPolls?: number;          // Default: 5
+
+  // Polling
+  maxTaskQueueActivitiesPerSecond?: number;          // Rate limiting
+  maxWorkerActivitiesPerSecond?: number;             // Rate limiting
+
+  // Shutdown
+  shutdownGraceTime?: string;                        // Default: '30s'
+
+  // Observability
+  enableSDKTracing?: boolean;
+  interceptors?: WorkerInterceptors;
+
+  // Advanced
+  debugMode?: boolean;
+  reuseV8Context?: boolean;
+  stickyQueueScheduleToStartTimeout?: string;
+}
+```
+
+### Python Worker Options
+
+```python
+Worker(
+    client: Client,
+    task_queue: str,
+    
+    # Workflows and activities
+    workflows: Sequence[Type],
+    activities: Sequence[Callable],
+    
+    # Concurrency
+    max_concurrent_activities: int = 100,
+    max_concurrent_workflow_tasks: int = 100,
+    max_concurrent_local_activities: int = 100,
+    
+    # Timeouts
+    max_heartbeat_throttle_interval: timedelta = timedelta(seconds=60),
+    default_heartbeat_throttle_interval: timedelta = timedelta(seconds=30),
+    
+    # Shutdown
+    graceful_shutdown_timeout: timedelta = timedelta(seconds=0),
+    
+    # Observability
+    interceptors: Sequence[Interceptor] = [],
+)
+```
+
+## Worker Best Practices
+
+### ✅ DO
+
+1. **Use Task Queues to Organize Work**
+```typescript
+// Separate queues by workload type
+const apiWorker = Worker.create({ taskQueue: 'api-queue' });
+const batchWorker = Worker.create({ taskQueue: 'batch-queue' });
+```
+
+2. **Implement Health Checks**
+```typescript
+// Essential for container orchestration
+app.get('/health', (req, res) => {
+  res.status(isHealthy ? 200 : 503).json({ 
+});
+```
+
+3. **Handle Graceful Shutdown**
+```typescript
+// Allow in-flight tasks to complete
+process.on('SIGTERM', async () => {
+  await worker.shutdown();
+});
+```
+
+4. **Set Appropriate Concurrency**
+```typescript
+// Based on workload characteristics
+maxConcurrentActivityTaskExecutions: cpuBound ? 10 : 200
+```
+
+5. **Monitor Worker Metrics**
+```typescript
+// Track key metrics
+- Task execution rate
+- Task success/failure rate
+- Queue lag
+- Resource utilization
+```
+
+### ❌ DON'T
+
+1. **Don't Run Multiple Workers on Same Task Queue Without Reason**
+   - Increases complexity
+   - Use when scaling needed
+
+2. **Don't Ignore Resource Limits**
+   - Set memory/CPU limits
+   - Prevent resource exhaustion
+
+3. **Don't Deploy Without Health Checks**
+   - Essential for production
+   - Kubernetes/Docker need them
+
+4. **Don't Hardcode Configuration**
+   - Use environment variables
+   - Support multiple environments
+
+5. **Don't Forget Graceful Shutdown**
+   - Data loss risk
+   - Incomplete transactions
+
+## Worker Monitoring
+
+### Key Metrics
+
+```typescript
+// Metrics to track
+{
+  // Throughput
+  'worker.task_execution_rate': 'tasks/second',
+  'worker.workflow_task_execution_rate': 'tasks/second',
+  'worker.activity_task_execution_rate': 'tasks/second',
+  
+  // Latency
+  'worker.task_execution_latency': 'milliseconds',
+  'worker.task_queue_latency': 'milliseconds',
+  
+  // Success/Failure
+  'worker.task_execution_failed': 'count',
+  'worker.activity_execution_failed': 'count',
+  
+  // Resource Usage
+  'worker.cpu_usage': 'percentage',
+  'worker.memory_usage': 'bytes',
+  
+  // Queue Stats
+  'worker.task_queue_depth': 'count',
+  'worker.pollers_count': 'count',
+}
+```
+
+### Alerting Thresholds
+
+```yaml
+# Example alert rules
+alerts:
+  - name: HighWorkerFailureRate
+    condition: worker.task_execution_failed > 10%
+    duration: 5m
+    
+  - name: WorkerQueueLag
+    condition: worker.task_queue_depth > 1000
+    duration: 10m
+    
+  - name: WorkerHighMemory
+    condition: worker.memory_usage > 90%
+    duration: 5m
+```
+
+## Troubleshooting Workers
+
+### Common Issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| Worker not picking up tasks | Wrong task queue | Verify task queue name |
+| High memory usage | Too many concurrent activities | Reduce concurrency |
+| Tasks timing out | Insufficient workers | Scale up workers |
+| Connection errors | Network issues | Check connectivity |
+| Worker crashes | Unhandled exceptions | Add error handling |
+
+### Debug Mode
+
+```typescript
+// Enable debug logging
+const worker = await Worker.create({
+  // ... other options
+  debugMode: true,
+});
+```
+
+→ See `temporal-deployment.mdc` for production deployment strategies
+→ See `temporal-testing.mdc` for worker testing approaches
+

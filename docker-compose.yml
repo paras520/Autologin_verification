@@ -7,9 +7,14 @@ services:
       - .env
     environment:
       # Connect directly to the m103 postgres container via the shared network.
-      DATABASE_URL: postgresql://postgres:postgres123@m103-postgres-local:5432/whitelist_db
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@m103-postgres-local:5432/whitelist_db
       # Point at the m103 backend container via the shared network.
       M103_BASE_URL: http://m103-backend-local:8001
+      # Temporal — overrides .env so it's easy to toggle per deploy without editing .env
+      TEMPORAL_STATE: "ON"
+      TEMPORAL_URI: temporal.diro.live:7233
+      TEMPORAL_NAMESPACE: default
+      UVICORN_HOST: "0.0.0.0"
     restart: unless-stopped
     networks:
       - default

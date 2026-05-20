@@ -36,6 +36,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import anyio
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -112,8 +114,8 @@ async def run_one(
         row_result["errors"].append(f"phase1_health: {exc}")
 
     async with lock:
-        with open(ckpts_dir / "01_health.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({**ident, "health": _serializable(health)}, ensure_ascii=False) + "\n")
+        async with await anyio.open_file(ckpts_dir / "01_health.jsonl", "a", encoding="utf-8") as f:
+            await f.write(json.dumps({**ident, "health": _serializable(health)}, ensure_ascii=False) + "\n")
 
     page_result = (health.get("page_result") if isinstance(health, dict) else None) or {}
     health_ok = isinstance(health, dict) and health.get("health") in {"OK", "REDIRECT"}
@@ -134,8 +136,8 @@ async def run_one(
             "exited_at_phase": "1_health",
         }
         async with lock:
-            with open(ckpts_dir / "06_final.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps({**ident, "final": row_result["final_decision"]}, ensure_ascii=False) + "\n")
+            async with await anyio.open_file(ckpts_dir / "06_final.jsonl", "a", encoding="utf-8") as f:
+                await f.write(json.dumps({**ident, "final": row_result["final_decision"]}, ensure_ascii=False) + "\n")
         return row_result
 
     # ---------- Phase 1.5: audience classifier ----------
@@ -163,8 +165,8 @@ async def run_one(
         })),
     }
     async with lock:
-        with open(ckpts_dir / "02_audience.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(audience_record, ensure_ascii=False) + "\n")
+        async with await anyio.open_file(ckpts_dir / "02_audience.jsonl", "a", encoding="utf-8") as f:
+            await f.write(json.dumps(audience_record, ensure_ascii=False) + "\n")
 
     audience_is_non_customer = bool(audience) and audience.get("is_customer_facing") is False
     audience_confidence = int(audience.get("confidence", 0)) if audience else 0
@@ -188,8 +190,8 @@ async def run_one(
             "exited_at_phase": "1.5_audience",
         }
         async with lock:
-            with open(ckpts_dir / "06_final.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps({**ident, "final": row_result["final_decision"]}, ensure_ascii=False) + "\n")
+            async with await anyio.open_file(ckpts_dir / "06_final.jsonl", "a", encoding="utf-8") as f:
+                await f.write(json.dumps({**ident, "final": row_result["final_decision"]}, ensure_ascii=False) + "\n")
         return row_result
 
     # ---------- Phase 2a: cheap extractor ----------
@@ -206,8 +208,8 @@ async def run_one(
         row_result["errors"].append(f"phase2a_extractor: {exc}")
 
     async with lock:
-        with open(ckpts_dir / "03_extractor.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({**ident, "extractor": _serializable(extractor)}, ensure_ascii=False) + "\n")
+        async with await anyio.open_file(ckpts_dir / "03_extractor.jsonl", "a", encoding="utf-8") as f:
+            await f.write(json.dumps({**ident, "extractor": _serializable(extractor)}, ensure_ascii=False) + "\n")
 
     row_result["phases"]["extractor"] = {
         "bank_identifier_count": len(extractor.get("bank_identifiers", []) or []),
@@ -230,8 +232,8 @@ async def run_one(
         row_result["errors"].append(f"phase2b_matcher: {exc}")
 
     async with lock:
-        with open(ckpts_dir / "04_matcher.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({**ident, "matcher": _serializable(matcher)}, ensure_ascii=False) + "\n")
+        async with await anyio.open_file(ckpts_dir / "04_matcher.jsonl", "a", encoding="utf-8") as f:
+            await f.write(json.dumps({**ident, "matcher": _serializable(matcher)}, ensure_ascii=False) + "\n")
 
     row_result["phases"]["matcher"] = {
         "bank_matched": matcher.get("bank_matched"),
@@ -255,8 +257,8 @@ async def run_one(
             row_result["errors"].append(f"phase3_country: {exc}")
 
     async with lock:
-        with open(ckpts_dir / "05_country.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({**ident, "country": _serializable(country)}, ensure_ascii=False) + "\n")
+        async with await anyio.open_file(ckpts_dir / "05_country.jsonl", "a", encoding="utf-8") as f:
+            await f.write(json.dumps({**ident, "country": _serializable(country)}, ensure_ascii=False) + "\n")
 
     row_result["phases"]["country"] = {
         "matched": country.get("matched") if country else "skipped",
@@ -279,8 +281,8 @@ async def run_one(
     }
     row_result["final_decision"] = final
     async with lock:
-        with open(ckpts_dir / "06_final.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps({**ident, "final": final}, ensure_ascii=False) + "\n")
+        async with await anyio.open_file(ckpts_dir / "06_final.jsonl", "a", encoding="utf-8") as f:
+            await f.write(json.dumps({**ident, "final": final}, ensure_ascii=False) + "\n")
 
     return row_result
 
@@ -385,7 +387,7 @@ async def main() -> None:
     lines += ["", "Files written:"]
     for p in sorted(ckpts_dir.glob("*.jsonl")):
         size = p.stat().st_size
-        line_count = sum(1 for _ in open(p, encoding="utf-8"))
+        line_count = len(p.read_text(encoding="utf-8").splitlines())
         lines.append(f"  {p.name:<24s}  {line_count} records  {size} bytes")
     summary = "\n".join(lines)
     (ckpts_dir / "summary.txt").write_text(summary, encoding="utf-8")

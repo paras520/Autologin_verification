@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import ssl
 from urllib.parse import urlparse, parse_qs
 
 import asyncpg
@@ -19,10 +18,7 @@ def _build_connect_kwargs(dsn: str) -> dict:
     clean_dsn = parsed._replace(query="").geturl()
     kwargs: dict = {"dsn": clean_dsn}
     if sslmode == "require":
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        kwargs["ssl"] = ctx
+        kwargs["ssl"] = True
     return kwargs
 
 

@@ -58,6 +58,19 @@ LLM_ACTIVITY_TIMEOUT = timedelta(seconds=60)
 COUNTRY_ACTIVITY_TIMEOUT = timedelta(seconds=10)
 
 # ---------------------------------------------------------------------------
+# Queue workflow
+# ---------------------------------------------------------------------------
+QUEUE_WORKFLOW_ID = "batch-verification-queue"  # singleton workflow ID matches task queue (m103/m112 convention)
+QUEUE_TASK_QUEUE = "batch-verification-queue"
+QUEUE_ITEM_THRESHOLD = 100                      # continue_as_new after this many items
+
+FETCH_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=1),
+    maximum_attempts=3,
+)
+FETCH_ACTIVITY_TIMEOUT = timedelta(seconds=30)
+
+# ---------------------------------------------------------------------------
 # Workflow timeouts
 # ---------------------------------------------------------------------------
 VERIFICATION_WORKFLOW_TIMEOUT = timedelta(minutes=5)

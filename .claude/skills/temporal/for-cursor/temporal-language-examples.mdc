@@ -1,0 +1,1648 @@
+# Temporal Language Examples - Multi-Language Implementation Reference
+
+**
+**SDK Versions:**
+- TypeScript: 1.10.0+
+- Python: 1.5.0+
+- Go: 1.25.0+
+- Java: 1.23.0+
+- .NET: 1.1.0+
+- PHP: 2.10.0+
+- Ruby: 0.1.0+ (Preview)
+
+## Complete Implementation Examples by Language
+
+This guide provides comprehensive, production-ready examples in all supported Temporal languages with  SDK features. Use this as a reference when implementing Temporal in any language.
+
+---
+
+## Table of Contents by Language
+
+1. [TypeScript/JavaScript](#typescript--javascript)
+2. [Python](#python)
+3. [Go](#go)
+4. [Java](#java)
+5. [.NET (C#)](#net-c)
+6. [PHP](#php)
+7. [Ruby](#ruby)
+
+---
+
+## TypeScript / JavaScript
+
+### Project Setup
+
+```bash
+# Initialize project
+npm init -y
+
+# Install dependencies
+npm install @temporalio/client @temporalio/worker @temporalio/workflow @temporalio/activity
+
+# Install dev dependencies
+npm install -D typescript @types/node ts-node
+
+# TypeScript configuration
+npx tsc --init
+```
+
+**tsconfig.json**:
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
+```
+
+### Complete Example: Order Processing
+
+**src/activities.ts**:
+```typescript
+import { Context } from '@temporalio/activity';
+
+export interface OrderData {
+  orderId: string;
+  customerId: string;
+  items: Array<{ productId: string; quantity: number; price: number }>;
+  total: number;
+}
+
+export interface PaymentResult {
+  transactionId: string;
+  
+  amount: number;
+}
+
+// Activity: Process payment
+export async function processPayment(
+  customerId: string,
+  amount: number
+): Promise<PaymentResult> {
+  console.log(`Processing payment for customer ${customerId}: $${amount}`);
+  
+  // Simulate payment processing
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  return {
+    transactionId: `txn_${Date.now()}`,
+    
+    amount,
+  };
+}
+
+// Activity: Reserve inventory
+export async function reserveInventory(
+  items: Array<{ productId: string; quantity: number }>
+): Promise<void> {
+  console.log('Reserving inventory', { items });
+  
+  for (const item of items) {
+    // Check cancellation
+    if (Context.current().cancelled) {
+      throw new Error('Inventory reservation cancelled');
+    }
+    
+    // Simulate inventory check
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Heartbeat for progress
+    Context.current().heartbeat({ processedItem: item.productId });
+  }
+}
+
+// Activity: Send notification
+export async function sendNotification(
+  customerId: string,
+  type: string,
+  data: any
+): Promise<void> {
+  console.log(`Sending ${type} notification to ${customerId}`, data);
+  
+  // Simulate email sending
+  await new Promise(resolve => setTimeout(resolve, 500));
+}
+
+// Activity: Ship order
+export async function shipOrder(
+  orderId: string,
+  address: string
+): Promise<{ trackingNumber: string }> {
+  console.log(`Shipping order ${orderId} to ${address}`);
+  
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  return {
+    trackingNumber: `TRK${Date.now()}`,
+  };
+}
+```
+
+**src/workflows.ts**:
+```typescript
+import { proxyActivities, sleep, log } from '@temporalio/workflow';
+import type * as activities from './activities';
+
+const {
+  processPayment,
+  reserveInventory,
+  sendNotification,
+  shipOrder,
+} = proxyActivities<typeof activities>({
+  startToCloseTimeout: '5 minutes',
+  retry: {
+    initialInterval: '1s',
+    backoffCoefficient: 2,
+    maximumAttempts: 3,
+    nonRetryableErrorTypes: ['ValidationError'],
+  },
+});
+
+export async function orderWorkflow(orderData: activities.OrderData): Promise<string> {
+  log.info('Order workflow started', { orderId: orderData.orderId });
+  
+  try {
+    // Step 1: Reserve inventory
+    await reserveInventory(orderData.items);
+    log.info('Inventory reserved');
+    
+    // Step 2: Process payment
+    const paymentResult = await processPayment(
+      orderData.customerId,
+      orderData.total
+    );
+    log.info('Payment processed', { transactionId: paymentResult.transactionId });
+    
+    // Step 3: Send confirmation (don't wait)
+    await sendNotification(orderData.customerId, 'order-confirmed', {
+      orderId: orderData.orderId,
+      transactionId: paymentResult.transactionId,
+    });
+    
+    // Step 4: Wait before shipping (business rule: 1 hour)
+    await sleep('1 hour');
+    
+    // Step 5: Ship order
+    const shipmentResult = await shipOrder(
+      orderData.orderId,
+      'Customer Address' // In reality, get from orderData
+    );
+    log.info('Order shipped', { trackingNumber: shipmentResult.trackingNumber });
+    
+    // Step 6: Send shipping notification
+    await sendNotification(orderData.customerId, 'order-shipped', {
+      orderId: orderData.orderId,
+      trackingNumber: shipmentResult.trackingNumber,
+    });
+    
+    return `Order ${orderData.orderId} completed successfully`;
+    
+  } catch (error) {
+    log.error('Order workflow failed', { error });
+    
+    // Notify customer of failure
+    await sendNotification(orderData.customerId, 'order-failed', {
+      orderId: orderData.orderId,
+      reason: error.message,
+    });
+    
+    throw error;
+  }
+}
+```
+
+**src/worker.ts**:
+```typescript
+import { Worker, NativeConnection } from '@temporalio/worker';
+import * as fs from 'fs';
+import * as activities from './activities';
+import { config } from './config';
+
+async function run() {
+  // Create connection with TLS if configured
+  const connectionOptions: any = {
+    address: config.uri,
+  };
+
+  if (config.tls) {
+    connectionOptions.tls = {
+      clientCertPair: {
+        crt: fs.readFileSync(config.tls.clientCertPath),
+        key: fs.readFileSync(config.tls.clientKeyPath),
+      },
+    };
+
+    if (config.tls.serverRootCACertPath) {
+      connectionOptions.tls.serverRootCACertificate = fs.readFileSync(
+        config.tls.serverRootCACertPath
+      );
+    }
+  }
+
+  const connection = await NativeConnection.connect(connectionOptions);
+
+  const worker = await Worker.create({
+    connection,
+    namespace: config.namespace,
+    taskQueue: config.taskQueue,
+    workflowsPath: require.resolve('./workflows'),
+    activities,
+    maxConcurrentActivityTaskExecutions: config.maxConcurrentActivities,
+    maxConcurrentWorkflowTaskExecutions: config.maxConcurrentWorkflows,
+  });
+
+  console.log(`
+╔════════════════════════════════════════════════════════════╗
+║              TEMPORAL WORKER STARTED                       ║
+╚════════════════════════════════════════════════════════════╝
+  
+  Environment: ${config.namespace}
+  URI: ${config.uri}
+  Task Queue: ${config.taskQueue}
+  
+  Polling for tasks...
+  `);
+
+  // Graceful shutdown
+  const shutdownSignals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGUSR2'];
+  shutdownSignals.forEach((signal) => {
+    process.once(signal, async () => {
+      console.log(`\nReceived ${signal}, shutting down gracefully...`);
+      await worker.shutdown();
+      await connection.close();
+      process.exit(0);
+    });
+  });
+
+  await worker.run();
+}
+
+run().catch((err) => {
+  console.error('Worker failed to start:', err);
+  process.exit(1);
+});
+```
+
+**src/client.ts**:
+```typescript
+import { Connection, WorkflowClient } from '@temporalio/client';
+import * as fs from 'fs';
+import { orderWorkflow } from './workflows';
+import { OrderData } from './activities';
+import { config } from './config';
+
+async function startWorkflow() {
+  // Create connection with TLS if configured
+  const connectionOptions: any = {
+    address: config.uri,
+  };
+
+  if (config.tls) {
+    connectionOptions.tls = {
+      clientCertPair: {
+        crt: fs.readFileSync(config.tls.clientCertPath),
+        key: fs.readFileSync(config.tls.clientKeyPath),
+      },
+    };
+
+    if (config.tls.serverRootCACertPath) {
+      connectionOptions.tls.serverRootCACertificate = fs.readFileSync(
+        config.tls.serverRootCACertPath
+      );
+    }
+  }
+
+  const connection = await Connection.connect(connectionOptions);
+  const client = new WorkflowClient({ 
+    connection, 
+    namespace: config.namespace 
+  });
+
+  const orderData: OrderData = {
+    orderId: 'ORD-123',
+    customerId: 'CUST-456',
+    items: [
+      { productId: 'PROD-1', quantity: 2, price: 29.99 },
+      { productId: 'PROD-2', quantity: 1, price: 49.99 },
+    ],
+    total: 109.97,
+  };
+
+  console.log(`
+╔════════════════════════════════════════════════════════════╗
+║           STARTING TEMPORAL WORKFLOW                       ║
+╚════════════════════════════════════════════════════════════╝
+
+  Environment: ${config.namespace}
+  Workflow ID: order-${orderData.orderId}
+  Task Queue: ${config.taskQueue}
+  `);
+
+  const handle = await client.start(orderWorkflow, {
+    args: [orderData],
+    taskQueue: config.taskQueue,
+    workflowId: `order-${orderData.orderId}`,
+  });
+
+  console.log(`✓ Workflow started: ${handle.workflowId}`);
+  console.log(`  View in Temporal UI: ${config.uri.replace(':7233', ':8080')}/namespaces/${config.namespace}/workflows/${handle.workflowId}\n`);
+  
+  console.log('Waiting for workflow to complete...');
+  const result = await handle.result();
+  console.log(`\n✓ Workflow completed: ${result}`);
+
+  await connection.close();
+}
+
+startWorkflow().catch((err) => {
+  console.error('Failed to start workflow:', err);
+  process.exit(1);
+});
+```
+
+**src/config.ts**:
+```typescript
+import * as dotenv from 'dotenv';
+import * as fs from 'fs';
+
+// Load environment variables
+dotenv.config();
+
+interface TemporalConfig {
+  uri: string;
+  namespace: string;
+  taskQueue: string;
+  tls?: {
+    clientCertPath: string;
+    clientKeyPath: string;
+    serverRootCACertPath?: string;
+  };
+  maxConcurrentActivities: number;
+  maxConcurrentWorkflows: number;
+}
+
+function loadConfig(): TemporalConfig {
+  const uri = process.env.TEMPORAL_URI;
+  const namespace = process.env.TEMPORAL_NAMESPACE;
+
+  if (!uri || !namespace) {
+    throw new Error(
+      'Missing required environment variables: TEMPORAL_URI and TEMPORAL_NAMESPACE must be set.\n' +
+      'Please copy .env.example to .env and fill in your company\'s Temporal connection details.'
+    );
+  }
+
+  // Validate namespace (must be one of the allowed phases)
+  const allowedNamespaces = ['stage1', 'stage2', 'production'];
+  if (!allowedNamespaces.includes(namespace)) {
+    console.warn(
+      `Warning: TEMPORAL_NAMESPACE="${namespace}" is not a standard phase.\n` +
+      `Expected one of: ${allowedNamespaces.join(', ')}`
+    );
+  }
+
+  const config: TemporalConfig = {
+    uri,
+    namespace,
+    taskQueue: process.env.TASK_QUEUE || 'default',
+    maxConcurrentActivities: parseInt(process.env.MAX_CONCURRENT_ACTIVITIES || '100'),
+    maxConcurrentWorkflows: parseInt(process.env.MAX_CONCURRENT_WORKFLOWS || '50'),
+  };
+
+  // TLS configuration (optional)
+  const certPath = process.env.TEMPORAL_TLS_CERT_PATH;
+  const keyPath = process.env.TEMPORAL_TLS_KEY_PATH;
+  const caPath = process.env.TEMPORAL_TLS_CA_PATH;
+
+  if (certPath && keyPath) {
+    // Validate that cert files exist
+    if (!fs.existsSync(certPath)) {
+      throw new Error(`TLS cert file not found: ${certPath}`);
+    }
+    if (!fs.existsSync(keyPath)) {
+      throw new Error(`TLS key file not found: ${keyPath}`);
+    }
+
+    config.tls = {
+      clientCertPath: certPath,
+      clientKeyPath: keyPath,
+      serverRootCACertPath: caPath,
+    };
+
+    console.log(`✓ TLS enabled for ${namespace} environment`);
+  }
+
+  console.log(`Temporal Configuration:
+  Environment: ${namespace}
+  URI: ${uri}
+  Task Queue: ${config.taskQueue}
+  TLS: ${config.tls ? 'Enabled' : 'Disabled'}
+  `);
+
+  return config;
+}
+
+export const config = loadConfig();
+```
+
+**package.json** (add dotenv):
+```json
+{
+  "dependencies": {
+    "@temporalio/client": "^1.10.0",
+    "@temporalio/worker": "^1.10.0",
+    "@temporalio/workflow": "^1.10.0",
+    "@temporalio/activity": "^1.10.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}
+```
+
+---
+
+## Python
+
+### Project Setup
+
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install temporalio
+
+# Create requirements.txt
+pip freeze > requirements.txt
+```
+
+### Complete Example: Order Processing
+
+**activities.py**:
+```python
+import asyncio
+from dataclasses import dataclass
+from temporalio import activity
+
+@dataclass
+class OrderData:
+    order_id: str
+    customer_id: str
+    items: list[dict]
+    total: float
+
+@dataclass
+class PaymentResult:
+    transaction_id: str
+    
+    amount: float
+
+@activity.defn
+async def process_payment(customer_id: str, amount: float) -> PaymentResult:
+    activity.logger.info(f"Processing payment for customer {customer_id}: ${amount}")
+    
+    # Simulate payment processing
+    await asyncio.sleep(1)
+    
+    return PaymentResult(
+        transaction_id=f"txn_{int(asyncio.get_event_loop().time())}",
+        status="completed",
+        amount=amount
+    )
+
+@activity.defn
+async def reserve_inventory(items: list[dict]) -> None:
+    activity.logger.info("Reserving inventory", extra={"items": items})
+    
+    for item in items:
+        # Simulate inventory check
+        await asyncio.sleep(0.5)
+        
+        # Heartbeat for progress
+        activity.heartbeat({"processed_item": item["product_id"]})
+
+@activity.defn
+async def send_notification(customer_id: str, notification_type: str, data: dict) -> None:
+    activity.logger.info(
+        f"Sending {notification_type} notification to {customer_id}",
+        extra={"data": data}
+    )
+    
+    # Simulate email sending
+    await asyncio.sleep(0.5)
+
+@activity.defn
+async def ship_order(order_id: str, address: str) -> dict:
+    activity.logger.info(f"Shipping order {order_id} to {address}")
+    
+    await asyncio.sleep(1)
+    
+    return {
+        "tracking_number": f"TRK{int(asyncio.get_event_loop().time())}"
+    }
+```
+
+**workflows.py**:
+```python
+from datetime import timedelta
+from temporalio import workflow
+from temporalio.common import RetryPolicy
+
+# Import activity types
+with workflow.unsafe.imports_passed_through():
+    from activities import (
+        process_payment,
+        reserve_inventory,
+        send_notification,
+        ship_order,
+        OrderData,
+    )
+
+@workflow.defn
+class OrderWorkflow:
+    @workflow.run
+    async def run(self, order_data: OrderData) -> str:
+        workflow.logger.info("Order workflow started", extra={"order_id": order_data.order_id})
+        
+        try:
+            # Step 1: Reserve inventory
+            await workflow.execute_activity(
+                reserve_inventory,
+                order_data.items,
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_attempts=3,
+                ),
+            )
+            workflow.logger.info("Inventory reserved")
+            
+            # Step 2: Process payment
+            payment_result = await workflow.execute_activity(
+                process_payment,
+                order_data.customer_id,
+                order_data.total,
+                start_to_close_timeout=timedelta(minutes=5),
+            )
+            workflow.logger.info(
+                "Payment processed",
+                extra={"transaction_id": payment_result.transaction_id}
+            )
+            
+            # Step 3: Send confirmation
+            await workflow.execute_activity(
+                send_notification,
+                order_data.customer_id,
+                "order-confirmed",
+                {
+                    "order_id": order_data.order_id,
+                    "transaction_id": payment_result.transaction_id,
+                },
+                start_to_close_timeout=timedelta(minutes=2),
+            )
+            
+            # Step 4: Wait before shipping
+            await workflow.sleep(timedelta(hours=1))
+            
+            # Step 5: Ship order
+            shipment_result = await workflow.execute_activity(
+                ship_order,
+                order_data.order_id,
+                "Customer Address",
+                start_to_close_timeout=timedelta(minutes=5),
+            )
+            workflow.logger.info(
+                "Order shipped",
+                extra={"tracking_number": shipment_result["tracking_number"]}
+            )
+            
+            # Step 6: Send shipping notification
+            await workflow.execute_activity(
+                send_notification,
+                order_data.customer_id,
+                "order-shipped",
+                {
+                    "order_id": order_data.order_id,
+                    "tracking_number": shipment_result["tracking_number"],
+                },
+                start_to_close_timeout=timedelta(minutes=2),
+            )
+            
+            return f"Order {order_data.order_id} completed successfully"
+            
+        except Exception as e:
+            workflow.logger.error("Order workflow failed", extra={"error": str(e)})
+            
+            # Notify customer of failure
+            await workflow.execute_activity(
+                send_notification,
+                order_data.customer_id,
+                "order-failed",
+                {"order_id": order_data.order_id, "reason": str(e)},
+                start_to_close_timeout=timedelta(minutes=2),
+            )
+            
+            raise
+```
+
+**worker.py**:
+```python
+import asyncio
+import signal
+from temporalio.client import Client, TLSConfig
+from temporalio.worker import Worker
+
+from workflows import OrderWorkflow
+from activities import process_payment, reserve_inventory, send_notification, ship_order
+from config import config
+
+async def main():
+    # Create TLS config if certificates are provided
+    tls_config = None
+    if config.has_tls():
+        with open(config.tls_cert_path, "rb") as f:
+            client_cert = f.read()
+        with open(config.tls_key_path, "rb") as f:
+            client_key = f.read()
+        
+        tls_config = TLSConfig(
+            client_cert=client_cert,
+            client_private_key=client_key,
+        )
+        
+        if config.tls_ca_path:
+            with open(config.tls_ca_path, "rb") as f:
+                tls_config.server_root_ca_cert = f.read()
+        
+        print(f"✓ TLS enabled for {config.namespace} environment")
+    
+    # Connect to Temporal
+    client = await Client.connect(
+        config.uri,
+        namespace=config.namespace,
+        tls=tls_config,
+    )
+    
+    # Create worker
+    worker = Worker(
+        client,
+        task_queue=config.task_queue,
+        workflows=[OrderWorkflow],
+        activities=[
+            process_payment,
+            reserve_inventory,
+            send_notification,
+            ship_order,
+        ],
+        max_concurrent_activities=config.max_concurrent_activities,
+        max_concurrent_workflow_tasks=config.max_concurrent_workflows,
+    )
+    
+    print(f"""
+╔════════════════════════════════════════════════════════════╗
+║              TEMPORAL WORKER STARTED                       ║
+╚════════════════════════════════════════════════════════════╝
+
+  Environment: {config.namespace}
+  URI: {config.uri}
+  Task Queue: {config.task_queue}
+  
+  Polling for tasks...
+    """)
+    
+    # Graceful shutdown
+    shutdown_event = asyncio.Event()
+    
+    def signal_handler():
+        print("\nReceived shutdown signal, shutting down gracefully...")
+        shutdown_event.set()
+    
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, signal_handler)
+    
+    # Run worker
+    try:
+        await worker.run()
+    except asyncio.CancelledError:
+        pass
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+**client.py**:
+```python
+import asyncio
+from temporalio.client import Client, TLSConfig
+
+from workflows import OrderWorkflow
+from activities import OrderData
+from config import config
+
+async def start_workflow():
+    # Create TLS config if certificates are provided
+    tls_config = None
+    if config.has_tls():
+        with open(config.tls_cert_path, "rb") as f:
+            client_cert = f.read()
+        with open(config.tls_key_path, "rb") as f:
+            client_key = f.read()
+        
+        tls_config = TLSConfig(
+            client_cert=client_cert,
+            client_private_key=client_key,
+        )
+        
+        if config.tls_ca_path:
+            with open(config.tls_ca_path, "rb") as f:
+                tls_config.server_root_ca_cert = f.read()
+    
+    # Connect to Temporal
+    client = await Client.connect(
+        config.uri,
+        namespace=config.namespace,
+        tls=tls_config,
+    )
+    
+    order_data = OrderData(
+        order_id="ORD-123",
+        customer_id="CUST-456",
+        items=[
+            {"product_id": "PROD-1", "quantity": 2, "price": 29.99},
+            {"product_id": "PROD-2", "quantity": 1, "price": 49.99},
+        ],
+        total=109.97,
+    )
+    
+    print(f"""
+╔════════════════════════════════════════════════════════════╗
+║           STARTING TEMPORAL WORKFLOW                       ║
+╚════════════════════════════════════════════════════════════╝
+
+  Environment: {config.namespace}
+  Workflow ID: order-{order_data.order_id}
+  Task Queue: {config.task_queue}
+    """)
+    
+    handle = await client.start_workflow(
+        OrderWorkflow.run,
+        order_data,
+        id=f"order-{order_data.order_id}",
+        task_queue=config.task_queue,
+    )
+    
+    print(f"✓ Workflow started: {handle.id}")
+    ui_url = config.uri.replace(":7233", ":8080")
+    print(f"  View in Temporal UI: {ui_url}/namespaces/{config.namespace}/workflows/{handle.id}\n")
+    
+    print("Waiting for workflow to complete...")
+    result = await handle.result()
+    print(f"\n✓ Workflow completed: {result}")
+
+if __name__ == "__main__":
+    asyncio.run(start_workflow())
+```
+
+**config.py**:
+```python
+import os
+from typing import Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+class TemporalConfig:
+    def __init__(self):
+        self.uri = os.getenv("TEMPORAL_URI")
+        self.namespace = os.getenv("TEMPORAL_NAMESPACE")
+        
+        # Validate required environment variables
+        if not self.uri or not self.namespace:
+            raise ValueError(
+                "Missing required environment variables: TEMPORAL_URI and TEMPORAL_NAMESPACE must be set.\n"
+                "Please copy .env.example to .env and fill in your company's Temporal connection details."
+            )
+        
+        # Validate namespace
+        allowed_namespaces = ["stage1", "stage2", "production"]
+        if self.namespace not in allowed_namespaces:
+            print(f"Warning: TEMPORAL_NAMESPACE='{self.namespace}' is not a standard phase.")
+            print(f"Expected one of: {', '.join(allowed_namespaces)}")
+        
+        self.task_queue = os.getenv("TASK_QUEUE", "default")
+        
+        # TLS configuration (optional)
+        self.tls_cert_path = os.getenv("TEMPORAL_TLS_CERT_PATH")
+        self.tls_key_path = os.getenv("TEMPORAL_TLS_KEY_PATH")
+        self.tls_ca_path = os.getenv("TEMPORAL_TLS_CA_PATH")
+        
+        # Worker configuration
+        self.max_concurrent_activities = int(os.getenv("MAX_CONCURRENT_ACTIVITIES", "100"))
+        self.max_concurrent_workflows = int(os.getenv("MAX_CONCURRENT_WORKFLOWS", "50"))
+        
+        # Print configuration
+        print(f"""
+Temporal Configuration:
+  Environment: {self.namespace}
+  URI: {self.uri}
+  Task Queue: {self.task_queue}
+  TLS: {'Enabled' if self.tls_cert_path and self.tls_key_path else 'Disabled'}
+        """)
+    
+    def has_tls(self) -> bool:
+        return bool(self.tls_cert_path and self.tls_key_path)
+
+config = TemporalConfig()
+```
+
+**requirements.txt** (add python-dotenv):
+```
+temporalio>=1.5.0
+python-dotenv>=1.0.1
+```
+
+---
+
+## Go
+
+### Project Setup
+
+```bash
+# Initialize module
+go mod init myapp
+
+# Install Temporal SDK
+go get go.temporal.io/sdk@latest
+```
+
+### Complete Example: Order Processing
+
+**activities.go**:
+```go
+package app
+
+import (
+    "context"
+    "fmt"
+    "time"
+    "go.temporal.io/sdk/activity"
+)
+
+type OrderData struct {
+    OrderID    string
+    CustomerID string
+    Items      []OrderItem
+    Total      float64
+}
+
+type OrderItem struct {
+    ProductID string
+    Quantity  int
+    Price     float64
+}
+
+type PaymentResult struct {
+    TransactionID string
+    Status        string
+    Amount        float64
+}
+
+// ProcessPayment activity
+func ProcessPayment(ctx context.Context, customerID string, amount float64) (PaymentResult, error) {
+    logger := activity.GetLogger(ctx)
+    logger.Info("Processing payment", "customerId", customerID, "amount", amount)
+    
+    // Simulate payment processing
+    time.Sleep(1 * time.Second)
+    
+    return PaymentResult{
+        TransactionID: fmt.Sprintf("txn_%d", time.Now().Unix()),
+        
+        Amount:        amount,
+    }, nil
+}
+
+// ReserveInventory activity
+func ReserveInventory(ctx context.Context, items []OrderItem) error {
+    logger := activity.GetLogger(ctx)
+    logger.Info("Reserving inventory", "items", items)
+    
+    for _, item := range items {
+        // Check cancellation
+        if ctx.Err() != nil {
+            return ctx.Err()
+        }
+        
+        // Simulate inventory check
+        time.Sleep(500 * time.Millisecond)
+        
+        // Heartbeat for progress
+        activity.RecordHeartbeat(ctx, map[string]interface{}{
+            "processedItem": item.ProductID,
+        })
+    }
+    
+    return nil
+}
+
+// SendNotification activity
+func SendNotification(ctx context.Context, customerID, notificationType string, data map[string]interface{}) error {
+    logger := activity.GetLogger(ctx)
+    logger.Info("Sending notification", 
+        "customerId", customerID, 
+        "type", notificationType, 
+        "data", data,
+    )
+    
+    // Simulate email sending
+    time.Sleep(500 * time.Millisecond)
+    
+    return nil
+}
+
+// ShipOrder activity
+func ShipOrder(ctx context.Context, orderID, address string) (map[string]string, error) {
+    logger := activity.GetLogger(ctx)
+    logger.Info("Shipping order", "orderId", orderID, "address", address)
+    
+    time.Sleep(1 * time.Second)
+    
+    return map[string]string{
+        "trackingNumber": fmt.Sprintf("TRK%d", time.Now().Unix()),
+    }, nil
+}
+```
+
+**workflows.go**:
+```go
+package app
+
+import (
+    "fmt"
+    "time"
+    "go.temporal.io/sdk/workflow"
+)
+
+// OrderWorkflow definition
+func OrderWorkflow(ctx workflow.Context, orderData OrderData) (string, error) {
+    logger := workflow.GetLogger(ctx)
+    logger.Info("Order workflow started", "orderId", orderData.OrderID)
+    
+    // Activity options
+    ao := workflow.ActivityOptions{
+        StartToCloseTimeout: 5 * time.Minute,
+        HeartbeatTimeout:    30 * time.Second,
+        RetryPolicy: &workflow.RetryPolicy{
+            InitialInterval:    time.Second,
+            BackoffCoefficient: 2.0,
+            MaximumAttempts:    3,
+        },
+    }
+    ctx = workflow.WithActivityOptions(ctx, ao)
+    
+    // Step 1: Reserve inventory
+    err := workflow.ExecuteActivity(ctx, ReserveInventory, orderData.Items).Get(ctx, nil)
+    if err != nil {
+        logger.Error("Failed to reserve inventory", "error", err)
+        return "", err
+    }
+    logger.Info("Inventory reserved")
+    
+    // Step 2: Process payment
+    var paymentResult PaymentResult
+    err = workflow.ExecuteActivity(ctx, ProcessPayment, orderData.CustomerID, orderData.Total).Get(ctx, &paymentResult)
+    if err != nil {
+        logger.Error("Failed to process payment", "error", err)
+        return "", err
+    }
+    logger.Info("Payment processed", "transactionId", paymentResult.TransactionID)
+    
+    // Step 3: Send confirmation
+    notificationData := map[string]interface{}{
+        "orderId":       orderData.OrderID,
+        "transactionId": paymentResult.TransactionID,
+    }
+    err = workflow.ExecuteActivity(ctx, SendNotification, orderData.CustomerID, "order-confirmed", notificationData).Get(ctx, nil)
+    if err != nil {
+        logger.Warn("Failed to send confirmation", "error", err)
+    }
+    
+    // Step 4: Wait before shipping
+    err = workflow.Sleep(ctx, 1*time.Hour)
+    if err != nil {
+        return "", err
+    }
+    
+    // Step 5: Ship order
+    var shipmentResult map[string]string
+    err = workflow.ExecuteActivity(ctx, ShipOrder, orderData.OrderID, "Customer Address").Get(ctx, &shipmentResult)
+    if err != nil {
+        logger.Error("Failed to ship order", "error", err)
+        return "", err
+    }
+    logger.Info("Order shipped", "trackingNumber", shipmentResult["trackingNumber"])
+    
+    // Step 6: Send shipping notification
+    shippingData := map[string]interface{}{
+        "orderId":        orderData.OrderID,
+        "trackingNumber": shipmentResult["trackingNumber"],
+    }
+    err = workflow.ExecuteActivity(ctx, SendNotification, orderData.CustomerID, "order-shipped", shippingData).Get(ctx, nil)
+    if err != nil {
+        logger.Warn("Failed to send shipping notification", "error", err)
+    }
+    
+    return fmt.Sprintf("Order %s completed successfully", orderData.OrderID), nil
+}
+```
+
+**config/config.go**:
+```go
+package config
+
+import (
+    "crypto/tls"
+    "fmt"
+    "os"
+    "strconv"
+    "github.com/joho/godotenv"
+)
+
+type Config struct {
+    URI                     string
+    Namespace               string
+    TaskQueue               string
+    TLS                     *tls.Config
+    MaxConcurrentActivities int
+    MaxConcurrentWorkflows  int
+}
+
+func Load() (*Config, error) {
+    // Load .env file
+    _ = godotenv.Load()
+    
+    uri := os.Getenv("TEMPORAL_URI")
+    namespace := os.Getenv("TEMPORAL_NAMESPACE")
+    
+    // Validate required variables
+    if uri == "" || namespace == "" {
+        return nil, fmt.Errorf(
+            "missing required environment variables: TEMPORAL_URI and TEMPORAL_NAMESPACE must be set.\n" +
+            "Please copy .env.example to .env and fill in your company's Temporal connection details.",
+        )
+    }
+    
+    // Validate namespace
+    allowedNamespaces := []string{"stage1", "stage2", "production"}
+    validNamespace := false
+    for _, ns := range allowedNamespaces {
+        if namespace == ns {
+            validNamespace = true
+            break
+        }
+    }
+    if !validNamespace {
+        fmt.Printf("Warning: TEMPORAL_NAMESPACE='%s' is not a standard phase.\n", namespace)
+        fmt.Printf("Expected one of: %v\n", allowedNamespaces)
+    }
+    
+    cfg := &Config{
+        URI:       uri,
+        Namespace: namespace,
+        TaskQueue: getEnvOrDefault("TASK_QUEUE", "default"),
+        MaxConcurrentActivities: getEnvAsInt("MAX_CONCURRENT_ACTIVITIES", 100),
+        MaxConcurrentWorkflows:  getEnvAsInt("MAX_CONCURRENT_WORKFLOWS", 50),
+    }
+    
+    // TLS configuration
+    certPath := os.Getenv("TEMPORAL_TLS_CERT_PATH")
+    keyPath := os.Getenv("TEMPORAL_TLS_KEY_PATH")
+    
+    if certPath != "" && keyPath != "" {
+        cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+        if err != nil {
+            return nil, fmt.Errorf("failed to load TLS certificates: %w", err)
+        }
+        
+        cfg.TLS = &tls.Config{
+            Certificates: []tls.Certificate{cert},
+        }
+        
+        fmt.Printf("✓ TLS enabled for %s environment\n", namespace)
+    }
+    
+    fmt.Printf(`
+Temporal Configuration:
+  Environment: %s
+  URI: %s
+  Task Queue: %s
+  TLS: %s
+
+`, cfg.Namespace, cfg.URI, cfg.TaskQueue, 
+        func() string { if cfg.TLS != nil { return "Enabled" } else { return "Disabled" } }())
+    
+    return cfg, nil
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+    if value := os.Getenv(key); value != "" {
+        return value
+    }
+    return defaultValue
+}
+
+func getEnvAsInt(key string, defaultValue int) int {
+    if value := os.Getenv(key); value != "" {
+        if intVal, err := strconv.Atoi(value); err == nil {
+            return intVal
+        }
+    }
+    return defaultValue
+}
+```
+
+**go.mod** (add godotenv):
+```go
+module myapp
+
+go 1.22
+
+require (
+    go.temporal.io/sdk v1.25.1
+    github.com/joho/godotenv v1.5.1
+)
+```
+
+**worker/main.go**:
+```go
+package main
+
+import (
+    "log"
+    "myapp/app"
+    "myapp/config"
+    
+    "go.temporal.io/sdk/client"
+    "go.temporal.io/sdk/worker"
+)
+
+func main() {
+    // Load configuration
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatalf("Failed to load configuration: %v", err)
+    }
+
+    // Create Temporal client
+    clientOptions := client.Options{
+        HostPort:  cfg.URI,
+        Namespace: cfg.Namespace,
+    }
+    
+    if cfg.TLS != nil {
+        clientOptions.ConnectionOptions = client.ConnectionOptions{
+            TLS: cfg.TLS,
+        }
+    }
+    
+    c, err := client.Dial(clientOptions)
+    if err != nil {
+        log.Fatalln("Unable to create client", err)
+    }
+    defer c.Close()
+
+    // Create worker
+    w := worker.New(c, cfg.TaskQueue, worker.Options{
+        MaxConcurrentActivityExecutionSize:     cfg.MaxConcurrentActivities,
+        MaxConcurrentWorkflowTaskExecutionSize: cfg.MaxConcurrentWorkflows,
+    })
+
+    // Register workflows
+    w.RegisterWorkflow(app.OrderWorkflow)
+    
+    // Register activities
+    w.RegisterActivity(app.ProcessPayment)
+    w.RegisterActivity(app.ReserveInventory)
+    w.RegisterActivity(app.SendNotification)
+    w.RegisterActivity(app.ShipOrder)
+
+    // Start worker
+    log.Printf(`
+╔════════════════════════════════════════════════════════════╗
+║              TEMPORAL WORKER STARTED                       ║
+╚════════════════════════════════════════════════════════════╝
+
+  Environment: %s
+  URI: %s
+  Task Queue: %s
+  
+  Polling for tasks...
+`, cfg.Namespace, cfg.URI, cfg.TaskQueue)
+    
+    err = w.Run(worker.InterruptCh())
+    if err != nil {
+        log.Fatalln("Unable to start worker", err)
+    }
+}
+```
+
+**client/main.go**:
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "myapp/app"
+    "myapp/config"
+    "strings"
+    
+    "go.temporal.io/sdk/client"
+)
+
+func main() {
+    // Load configuration
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatalf("Failed to load configuration: %v", err)
+    }
+
+    // Create Temporal client
+    clientOptions := client.Options{
+        HostPort:  cfg.URI,
+        Namespace: cfg.Namespace,
+    }
+    
+    if cfg.TLS != nil {
+        clientOptions.ConnectionOptions = client.ConnectionOptions{
+            TLS: cfg.TLS,
+        }
+    }
+    
+    c, err := client.Dial(clientOptions)
+    if err != nil {
+        log.Fatalln("Unable to create client", err)
+    }
+    defer c.Close()
+
+    // Prepare order data
+    orderData := app.OrderData{
+        OrderID:    "ORD-123",
+        CustomerID: "CUST-456",
+        Items: []app.OrderItem{
+            {ProductID: "PROD-1", Quantity: 2, Price: 29.99},
+            {ProductID: "PROD-2", Quantity: 1, Price: 49.99},
+        },
+        Total: 109.97,
+    }
+
+    // Start workflow
+    workflowID := "order-" + orderData.OrderID
+    workflowOptions := client.StartWorkflowOptions{
+        ID:        workflowID,
+        TaskQueue: cfg.TaskQueue,
+    }
+
+    log.Printf(`
+╔════════════════════════════════════════════════════════════╗
+║           STARTING TEMPORAL WORKFLOW                       ║
+╚════════════════════════════════════════════════════════════╝
+
+  Environment: %s
+  Workflow ID: %s
+  Task Queue: %s
+`, cfg.Namespace, workflowID, cfg.TaskQueue)
+
+    we, err := c.ExecuteWorkflow(context.Background(), workflowOptions, app.OrderWorkflow, orderData)
+    if err != nil {
+        log.Fatalln("Unable to execute workflow", err)
+    }
+
+    log.Printf("✓ Workflow started: %s", we.GetID())
+    
+    // Generate UI URL
+    uiURL := strings.Replace(cfg.URI, ":7233", ":8080", 1)
+    log.Printf("  View in Temporal UI: http://%s/namespaces/%s/workflows/%s\n", 
+        uiURL, cfg.Namespace, we.GetID())
+
+    log.Println("Waiting for workflow to complete...")
+    
+    // Wait for result
+    var result string
+    err = we.Get(context.Background(), &result)
+    if err != nil {
+        log.Fatalln("Unable to get workflow result", err)
+    }
+
+    fmt.Printf("\n✓ Workflow completed: %s\n", result)
+}
+```
+
+---
+
+## Java
+
+### Project Setup (Maven)
+
+**pom.xml**:
+```xml
+<project>
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.example</groupId>
+    <artifactId>temporal-app</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <temporal.version>1.23.0</temporal.version>
+    </properties>
+    
+    <dependencies>
+        <dependency>
+            <groupId>io.temporal</groupId>
+            <artifactId>temporal-sdk</artifactId>
+            <version>${temporal.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.4.14</version>
+        </dependency>
+    </dependencies>
+</project>
+```
+
+### Complete Example (Abbreviated for space)
+
+**OrderActivities.java**:
+```java
+package com.example.temporal;
+
+import io.temporal.activity.ActivityInterface;
+import io.temporal.activity.ActivityMethod;
+import java.util.List;
+import java.util.Map;
+
+@ActivityInterface
+public interface OrderActivities {
+    @ActivityMethod
+    PaymentResult processPayment(String customerId, double amount);
+    
+    @ActivityMethod
+    void reserveInventory(List<OrderItem> items);
+    
+    @ActivityMethod
+    void sendNotification(String customerId, String type, Map<String, Object> data);
+    
+    @ActivityMethod
+    Map<String, String> shipOrder(String orderId, String address);
+}
+
+// Implementation
+public class OrderActivitiesImpl implements OrderActivities {
+    @Override
+    public PaymentResult processPayment(String customerId, double amount) {
+        System.out.println("Processing payment: " + customerId + ", $" + amount);
+        // Payment logic here
+        return new PaymentResult("txn_" + System.currentTimeMillis(), "completed", amount);
+    }
+    
+    // ... other activity implementations
+}
+```
+
+**OrderWorkflow.java**:
+```java
+package com.example.temporal;
+
+import io.temporal.workflow.WorkflowInterface;
+import io.temporal.workflow.WorkflowMethod;
+import io.temporal.workflow.Workflow;
+import io.temporal.activity.ActivityOptions;
+import java.time.Duration;
+
+@WorkflowInterface
+public interface OrderWorkflow {
+    @WorkflowMethod
+    String processOrder(OrderData orderData);
+}
+
+public class OrderWorkflowImpl implements OrderWorkflow {
+    private final OrderActivities activities = Workflow.newActivityStub(
+        OrderActivities.class,
+        ActivityOptions.newBuilder()
+            .setStartToCloseTimeout(Duration.ofMinutes(5))
+            .build()
+    );
+    
+    @Override
+    public String processOrder(OrderData orderData) {
+        // Reserve inventory
+        activities.reserveInventory(orderData.getItems());
+        
+        // Process payment
+        PaymentResult payment = activities.processPayment(
+            orderData.getCustomerId(),
+            orderData.getTotal()
+        );
+        
+        // Ship order
+        Map<String, String> shipment = activities.shipOrder(
+            orderData.getOrderId(),
+            "Customer Address"
+        );
+        
+        return "Order " + orderData.getOrderId() + " completed";
+    }
+}
+```
+
+---
+
+## .NET (C#)
+
+### Project Setup
+
+```bash
+dotnet new console -n TemporalApp
+cd TemporalApp
+dotnet add package Temporalio
+```
+
+### Complete Example (Abbreviated)
+
+**Activities.cs**:
+```csharp
+using Temporalio.Activities;
+
+public class OrderActivities
+{
+    [Activity]
+    public async Task<PaymentResult> ProcessPaymentAsync(string customerId, double amount)
+    {
+        Console.WriteLine($"Processing payment: {customerId}, ${amount}");
+        await Task.Delay(1000);
+        
+        return new PaymentResult
+        {
+            TransactionId = $"txn_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}",
+            Status = "completed",
+            Amount = amount
+        };
+    }
+    
+    [Activity]
+    public async Task ReserveInventoryAsync(List<OrderItem> items)
+    {
+        Console.WriteLine($"Reserving inventory: {items.Count} items");
+        await Task.Delay(500);
+    }
+    
+    // ... other activities
+}
+```
+
+**Workflows.cs**:
+```csharp
+using Temporalio.Workflows;
+
+[Workflow]
+public class OrderWorkflow
+{
+    [WorkflowRun]
+    public async Task<string> RunAsync(OrderData orderData)
+    {
+        var activities = Workflow.CreateActivityStub<OrderActivities>(
+            new ActivityOptions
+            {
+                StartToCloseTimeout = TimeSpan.FromMinutes(5)
+            }
+        );
+        
+        // Reserve inventory
+        await activities.ReserveInventoryAsync(orderData.Items);
+        
+        // Process payment
+        var payment = await activities.ProcessPaymentAsync(
+            orderData.CustomerId,
+            orderData.Total
+        );
+        
+        return $"Order {orderData.OrderId} completed";
+    }
+}
+```
+
+---
+
+## PHP
+
+### Project Setup
+
+```bash
+composer require temporal/sdk
+```
+
+### Complete Example (Abbreviated)
+
+**Activities.php**:
+```php
+<?php
+
+use Temporal\Activity\ActivityInterface;
+use Temporal\Activity\ActivityMethod;
+
+#[ActivityInterface]
+class OrderActivities
+{
+    #[ActivityMethod]
+    public function processPayment(string $customerId, float $amount): array
+    {
+        echo "Processing payment: $customerId, \$$amount\n";
+        sleep(1);
+        
+        return [
+            'transactionId' => 'txn_' . time(),
+            'status' => 'completed',
+            'amount' => $amount
+        ];
+    }
+    
+    // ... other activities
+}
+```
+
+---
+
+## Ruby
+
+### Project Setup
+
+```bash
+gem install temporalio
+```
+
+### Complete Example (Abbreviated)
+
+**activities.rb**:
+```ruby
+require 'temporalio/activity'
+
+class OrderActivities
+  extend Temporalio::Activity
+  
+  activity :process_payment
+  def process_payment(customer_id, amount)
+    puts "Processing payment: #{customer_id}, $#{amount}"
+    sleep 1
+    
+    {
+      transaction_id: "txn_#{Time.now.to_i}",
+      
+      amount: amount
+    }
+  end
+  
+  # ... other activities
+end
+```
+
+---
+
+## Quick Reference Table
+
+| Language | Package Manager | Main SDK Package | Workflow Decorator | Activity Decorator |
+|----------|----------------|------------------|-------------------|-------------------|
+| TypeScript | npm | @temporalio/* | Function | Function |
+| Python | pip | temporalio | @workflow.defn | @activity.defn |
+| Go | go get | go.temporal.io/sdk | Function | Function |
+| Java | Maven/Gradle | io.temporal:temporal-sdk | @WorkflowMethod | @ActivityMethod |
+| .NET | NuGet | Temporalio | [Workflow] | [Activity] |
+| PHP | Composer | temporal/sdk | #[WorkflowInterface] | #[ActivityMethod] |
+| Ruby | gem | temporalio | class method | extend Activity |
+
+→ See `temporal-workflows.mdc` for workflow patterns
+→ See `temporal-activities.mdc` for activity patterns
+→ See `temporal-use-cases.mdc` for use case examples
+

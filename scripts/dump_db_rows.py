@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import anyio
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -35,8 +37,8 @@ async def dump():
     total = sum(len(v) for v in all_rows.values())
     out = REPO_ROOT / "output" / "db_rows_dump.json"
     out.parent.mkdir(exist_ok=True)
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(all_rows, f, ensure_ascii=False, indent=2, default=str)
+    async with await anyio.open_file(out, "w", encoding="utf-8") as f:
+        await f.write(json.dumps(all_rows, ensure_ascii=False, indent=2, default=str))
     print(f"\nDONE: {total} total rows saved to {out}")
 
 

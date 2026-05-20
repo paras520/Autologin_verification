@@ -23,6 +23,8 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+import anyio
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
@@ -236,13 +238,13 @@ async def main_async(concurrency: int, limit: int | None):
     raw_path = OUTPUT_DIR / f"scrape_only_{ts}.jsonl"
     summary_path = OUTPUT_DIR / f"scrape_quality_{ts}.txt"
 
-    with open(raw_path, "w", encoding="utf-8") as f:
+    async with await anyio.open_file(raw_path, "w", encoding="utf-8") as f:
         for e in entries:
-            f.write(json.dumps(e, ensure_ascii=False, default=str) + "\n")
+            await f.write(json.dumps(e, ensure_ascii=False, default=str) + "\n")
 
     summary = summarize(entries)
-    with open(summary_path, "w", encoding="utf-8") as f:
-        f.write(summary)
+    async with await anyio.open_file(summary_path, "w", encoding="utf-8") as f:
+        await f.write(summary)
 
     print(f"\n{summary}")
     print(f"\n[out] raw:     {raw_path}")

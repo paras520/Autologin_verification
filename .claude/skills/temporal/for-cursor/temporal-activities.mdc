@@ -1,0 +1,927 @@
+# Temporal Activities - Complete Implementation Guide
+
+**
+
+## What is an Activity?
+
+An **Activity** is a unit of work that represents a single, well-defined action in your workflow. Activities contain the actual business logic that interacts with external systems.
+
+### Key Characteristics
+
+✅ **Non-Deterministic**: Can make external calls, generate random values
+✅ **Retriable**: Automatically retried on failure
+✅ **Timeout-Based**: Multiple timeout controls
+✅ **Heartbeat Support**: Long-running activities can report progress
+✅ **Idempotent**: Should be safe to retry
+✅ **Cancellable**: Can be gracefully cancelled
+
+## Activity vs Workflow
+
+| Aspect | Workflow | Activity |
+|--------|----------|----------|
+| Purpose | Orchestration | Execution |
+| Determinism | Must be deterministic | Can be non-deterministic |
+| External calls | ❌ Not allowed | ✅ Allowed |
+| Retries | Workflow-level | Built-in activity retries |
+| Duration | Minutes to years | Seconds to hours |
+| State | Durable | Stateless |
+
+## Activity Implementation Patterns
+
+### Pattern 1: Simple Activity
+
+**Use Case**: Basic operation with external interaction
+
+```typescript
+// TypeScript Example
+export async function sendEmail(to: string, subject: string, body: string): Promise<void> {
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: 587,
+  });
+  
+  await transporter.sendMail({
+    from: 'noreply@example.com',
+    to,
+    subject,
+    text: body,
+  });
+  
+  console.log(`Email sent to ${to}`);
+}
+```
+
+```python
+# Python Example
+from temporalio import activity
+import httpx
+
+@activity.defn
+async def send_email(to: str, subject: str, body: str) -> None:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.emailprovider.com/send",
+            json={
+                "to": to,
+                "subject": subject,
+                "body": body
+            }
+        )
+        response.raise_for_status()
+    
+    activity.logger.info(f"Email sent to {to}")
+```
+
+```go
+// Go Example
+package activities
+
+import (
+    "context"
+    "fmt"
+    "go.temporal.io/sdk/activity"
+)
+
+func SendEmail(ctx context.Context, to, subject, body string) error {
+    logger := activity.GetLogger(ctx)
+    
+    // Send email via external service
+    err := emailService.Send(to, subject, body)
+    if err != nil {
+        return fmt.Errorf("failed to send email: %w", err)
+    }
+    
+    logger.Info("Email sent", "to", to)
+    return nil
+}
+```
+
+```java
+// Java Example
+public class EmailActivities {
+    @ActivityInterface
+    public interface Activities {
+        void sendEmail(String to, String subject, String body);
+    }
+    
+    public static class ActivitiesImpl implements Activities {
+        @Override
+        public void sendEmail(String to, String subject, String body) {
+            Activity.getExecutionContext().getLogger()
+                .info("Sending email to " + to);
+            
+            // Send email via external service
+            emailService.send(to, subject, body);
+            
+            Activity.getExecutionContext().getLogger()
+                .info("Email sent successfully");
+        }
+    }
+}
+```
+
+### Pattern 2: Activity with Retry Logic
+
+**Use Case**: Operations that might fail transiently
+
+```typescript
+// TypeScript Example
+import { ApplicationFailure } from '@temporalio/activity';
+
+export async function callExternalApi(endpoint: string): Promise<any> {
+  try {
+    const response = await fetch(endpoint);
+    
+    if (response.status === 400) {
+      // Non-retryable error
+      throw ApplicationFailure.nonRetryable(
+        'Invalid request',
+        'InvalidRequest'
+      );
+    }
+    
+    if (response.status === 429) {
+      // Retryable with specific message
+      throw ApplicationFailure.retryable(
+        'Rate limited, will retry',
+        'RateLimited'
+      );
+    }
+    
+    if (!response.ok) {
+      // Generic retryable error
+      throw new Error(`API call failed: ${response.statusText}`);
+    }
+    
+    return await response.json();
+    
+  } catch (error) {
+    if (error instanceof ApplicationFailure) {
+      throw error;
+    }
+    // Wrap unknown errors as retryable
+    throw ApplicationFailure.retryable(
+      `Unexpected error: ${error.message}`,
+      'UnexpectedError'
+    );
+  }
+}
+```
+
+```python
+# Python Example
+from temporalio import activity
+from temporalio.exceptions import ApplicationError
+
+@activity.defn
+async def call_external_api(endpoint: str) -> dict:
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(endpoint)
+            
+            if response.status_code == 400:
+                # Non-retryable error
+                raise ApplicationError(
+                    "Invalid request",
+                    type="InvalidRequest",
+                    non_retryable=True
+                )
+            
+            if response.status_code == 429:
+                # Retryable error
+                raise ApplicationError(
+                    "Rate limited, will retry",
+                    type="RateLimited",
+                    non_retryable=False
+                )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except httpx.HTTPError as e:
+            raise ApplicationError(
+                f"API call failed: {str(e)}",
+                type="APIError",
+                non_retryable=False
+            )
+```
+
+```go
+// Go Example
+import (
+    "go.temporal.io/sdk/temporal"
+)
+
+func CallExternalAPI(ctx context.Context, endpoint string) (map[string]interface{}, error) {
+    resp, err := http.Get(endpoint)
+    if err != nil {
+        // Retryable error
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode == 400 {
+        // Non-retryable error
+        return nil, temporal.NewNonRetryableApplicationError(
+            "Invalid request",
+            "InvalidRequest",
+            nil,
+        )
+    }
+    
+    if resp.StatusCode == 429 {
+        // Retryable error
+        return nil, temporal.NewApplicationError(
+            "Rate limited, will retry",
+            "RateLimited",
+        )
+    }
+    
+    var result map[string]interface{}
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return nil, err
+    }
+    
+    return result, nil
+}
+```
+
+### Pattern 3: Long-Running Activity with Heartbeat
+
+**Use Case**: Activities that take minutes/hours and need progress tracking
+
+```typescript
+// TypeScript Example
+import { Context, heartbeat } from '@temporalio/activity';
+
+export async function processLargeFile(filePath: string): Promise<string> {
+  const fileSize = await getFileSize(filePath);
+  const chunkSize = 1024 * 1024; // 1MB chunks
+  let processed = 0;
+  
+  for (let offset = 0; offset < fileSize; offset += chunkSize) {
+    // Check for cancellation
+    Context.current().heartbeat(processed);
+    
+    // Process chunk
+    await processChunk(filePath, offset, chunkSize);
+    processed += chunkSize;
+    
+    // Report progress (% complete)
+    const progress = Math.min(100, (processed / fileSize) * 100);
+    heartbeat({ progress, bytesProcessed: processed });
+  }
+  
+  return `Processed ${fileSize} bytes`;
+}
+```
+
+```python
+# Python Example
+from temporalio import activity
+
+@activity.defn
+async def process_large_file(file_path: str) -> str:
+    file_size = await get_file_size(file_path)
+    chunk_size = 1024 * 1024  # 1MB chunks
+    processed = 0
+    
+    for offset in range(0, file_size, chunk_size):
+        # Check for cancellation and report progress
+        activity.heartbeat({"progress": processed})
+        
+        # Process chunk
+        await process_chunk(file_path, offset, chunk_size)
+        processed += chunk_size
+        
+        # Report progress
+        progress = min(100, (processed / file_size) * 100)
+        activity.heartbeat({
+            "progress": progress,
+            "bytes_processed": processed
+        })
+    
+    return f"Processed {file_size} bytes"
+```
+
+```go
+// Go Example
+func ProcessLargeFile(ctx context.Context, filePath string) (string, error) {
+    fileSize, err := getFileSize(filePath)
+    if err != nil {
+        return "", err
+    }
+    
+    chunkSize := 1024 * 1024 // 1MB chunks
+    processed := 0
+    
+    for offset := 0; offset < fileSize; offset += chunkSize {
+        // Check for cancellation
+        if ctx.Err() != nil {
+            return "", ctx.Err()
+        }
+        
+        // Report progress via heartbeat
+        activity.RecordHeartbeat(ctx, map[string]interface{}{
+            "progress": processed,
+        })
+        
+        // Process chunk
+        err := processChunk(filePath, offset, chunkSize)
+        if err != nil {
+            return "", err
+        }
+        
+        processed += chunkSize
+        
+        // Report detailed progress
+        progress := float64(processed) / float64(fileSize) * 100
+        activity.RecordHeartbeat(ctx, map[string]interface{}{
+            "progress":        progress,
+            "bytesProcessed":  processed,
+        })
+    }
+    
+    return fmt.Sprintf("Processed %d bytes", fileSize), nil
+}
+```
+
+### Pattern 4: Idempotent Activity
+
+**Use Case**: Activities that can be safely retried
+
+```typescript
+// TypeScript Example
+export async function createOrder(orderId: string, orderData: OrderData): Promise<Order> {
+  // Check if order already exists (idempotency)
+  const existing = await database.orders.findOne({ orderId });
+  if (existing) {
+    console.log(`Order ${orderId} already exists, returning existing`);
+    return existing;
+  }
+  
+  // Create new order
+  const order = await database.orders.create({
+    orderId,
+    ...orderData,
+    createdAt: new Date(),
+  });
+  
+  console.log(`Created order ${orderId}`);
+  return order;
+}
+```
+
+```python
+# Python Example
+@activity.defn
+async def create_order(order_id: str, order_data: dict) -> dict:
+    # Check if order already exists (idempotency)
+    existing = await database.orders.find_one({"order_id": order_id})
+    if existing:
+        activity.logger.info(f"Order {order_id} already exists")
+        return existing
+    
+    # Create new order
+    order = await database.orders.insert_one({
+        "order_id": order_id,
+        **order_data,
+        "created_at": datetime.now()
+    })
+    
+    activity.logger.info(f"Created order {order_id}")
+    return order
+```
+
+### Pattern 5: Activity with Cancellation Handling
+
+**Use Case**: Graceful cleanup on cancellation
+
+```typescript
+// TypeScript Example
+import { CancellationScope, cancelled, Context } from '@temporalio/activity';
+
+export async function uploadFile(filePath: string, destination: string): Promise<string> {
+  const uploadHandle = startUpload(filePath, destination);
+  
+  try {
+    // Monitor cancellation
+    await Context.current().run(async () => {
+      while (!uploadHandle.isComplete()) {
+        // Check for cancellation
+        if (Context.current().cancellationSignal.aborted) {
+          console.log('Upload cancelled, cleaning up...');
+          await uploadHandle.cancel();
+          throw new Error('Upload cancelled');
+        }
+        
+        await sleep(1000);
+        heartbeat({ progress: uploadHandle.getProgress() });
+      }
+    });
+    
+    return uploadHandle.getResult();
+    
+  } catch (error) {
+    // Cleanup on error
+    await uploadHandle.cleanup();
+    throw error;
+  }
+}
+```
+
+```go
+// Go Example
+func UploadFile(ctx context.Context, filePath, destination string) (string, error) {
+    uploadHandle := startUpload(filePath, destination)
+    
+    // Cleanup function
+    defer func() {
+        if ctx.Err() != nil {
+            uploadHandle.Cancel()
+        }
+    }()
+    
+    for !uploadHandle.IsComplete() {
+        // Check for cancellation
+        select {
+        case <-ctx.Done():
+            activity.GetLogger(ctx).Info("Upload cancelled, cleaning up")
+            uploadHandle.Cancel()
+            return "", ctx.Err()
+        default:
+            // Continue upload
+        }
+        
+        time.Sleep(time.Second)
+        activity.RecordHeartbeat(ctx, map[string]interface{}{
+            "progress": uploadHandle.GetProgress(),
+        })
+    }
+    
+    return uploadHandle.GetResult(), nil
+}
+```
+
+### Pattern 6: Batch Activity
+
+**Use Case**: Process multiple items efficiently
+
+```typescript
+// TypeScript Example
+export async function processUsersBatch(userIds: string[]): Promise<ProcessResult[]> {
+  const results: ProcessResult[] = [];
+  
+  // Process in batches to avoid overwhelming external services
+  const batchSize = 10;
+  
+  for (let i = 0; i < userIds.length; i += batchSize) {
+    const batch = userIds.slice(i, i + batchSize);
+    
+    // Process batch in parallel
+    const batchResults = await Promise.all(
+      batch.map(userId => processUser(userId))
+    );
+    
+    results.push(...batchResults);
+    
+    // Heartbeat with progress
+    heartbeat({
+      processed: i + batch.length,
+      total: userIds.length,
+    });
+  }
+  
+  return results;
+}
+```
+
+### Pattern 7: Activity with Local State
+
+**Use Case**: Activity that needs to maintain state across retries
+
+```typescript
+// TypeScript Example
+export async function downloadWithResume(url: string): Promise<Buffer> {
+  const activityInfo = Context.current().info;
+  const resumeToken = activityInfo.heartbeatDetails as { bytesDownloaded?: number };
+  
+  let startByte = resumeToken?.bytesDownloaded || 0;
+  
+  const response = await fetch(url, {
+    headers: {
+      'Range': `bytes=${startByte}-`,
+    },
+  });
+  
+  const totalSize = parseInt(response.headers.get('content-length') || '0');
+  const buffer = Buffer.alloc(totalSize);
+  let downloaded = startByte;
+  
+  for await (const chunk of response.body) {
+    chunk.copy(buffer, downloaded);
+    downloaded += chunk.length;
+    
+    // Heartbeat with progress that can be resumed
+    heartbeat({ bytesDownloaded: downloaded });
+  }
+  
+  return buffer;
+}
+```
+
+### Pattern 8: Activity with External Service Integration
+
+**Use Case**: Integrate with third-party APIs
+
+```typescript
+// TypeScript Example
+import Stripe from 'stripe';
+import { ApplicationFailure } from '@temporalio/activity';
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+export async function chargeCustomer(
+  customerId: string,
+  amount: number,
+  currency: string = 'usd'
+): Promise<{ transactionId: string; 
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount,
+      currency,
+      customer: customerId,
+      confirm: true,
+    });
+    
+    return {
+      transactionId: paymentIntent.id,
+      
+    };
+    
+  } catch (error) {
+    if (error.type === 'StripeCardError') {
+      // Non-retryable - card declined
+      throw ApplicationFailure.nonRetryable(
+        `Card declined: ${error.message}`,
+        'CardDeclined'
+      );
+    }
+    
+    if (error.type === 'StripeRateLimitError') {
+      // Retryable - rate limit
+      throw ApplicationFailure.retryable(
+        'Stripe rate limit hit',
+        'RateLimited'
+      );
+    }
+    
+    // Other errors are retryable
+    throw error;
+  }
+}
+```
+
+```python
+# Python Example
+import stripe
+from temporalio import activity
+from temporalio.exceptions import ApplicationError
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+
+@activity.defn
+async def charge_customer(
+    customer_id: str,
+    amount: int,
+    currency: str = "usd"
+) -> dict:
+    try:
+        payment_intent = await stripe.PaymentIntent.create_async(
+            amount=amount,
+            currency=currency,
+            customer=customer_id,
+            confirm=True
+        )
+        
+        return {
+            "transaction_id": payment_intent.id,
+            "status": payment_intent.status
+        }
+        
+    except stripe.error.CardError as e:
+        # Non-retryable - card declined
+        raise ApplicationError(
+            f"Card declined: {str(e)}",
+            type="CardDeclined",
+            non_retryable=True
+        )
+    
+    except stripe.error.RateLimitError as e:
+        # Retryable - rate limit
+        raise ApplicationError(
+            "Stripe rate limit hit",
+            type="RateLimited",
+            non_retryable=False
+        )
+```
+
+## Activity Configuration
+
+### Timeout Types
+
+```typescript
+// All timeout configurations
+{
+  // Total time activity can take (including retries)
+  scheduleToCloseTimeout: '10 minutes',
+  
+  // Time for single execution attempt
+  startToCloseTimeout: '2 minutes',
+  
+  // Time activity can wait in queue
+  scheduleToStartTimeout: '1 minute',
+  
+  // Interval for heartbeat checks (for long activities)
+  heartbeatTimeout: '30 seconds',
+}
+```
+
+### Retry Policy
+
+```typescript
+// Comprehensive retry configuration
+{
+  retry: {
+    // Initial delay before first retry
+    initialInterval: '1s',
+    
+    // Multiplier for each retry (exponential backoff)
+    backoffCoefficient: 2.0,
+    
+    // Maximum number of retry attempts
+    maximumAttempts: 5,
+    
+    // Maximum delay between retries
+    maximumInterval: '60s',
+    
+    // Errors that should not trigger retries
+    nonRetryableErrorTypes: [
+      'InvalidInput',
+      'NotFound',
+      'Unauthorized',
+    ],
+  }
+}
+```
+
+### Task Queue Assignment
+
+```typescript
+// Route activities to specific workers
+{
+  taskQueue: 'high-priority-queue',
+}
+```
+
+## Activity Best Practices
+
+### ✅ DO
+
+1. **Make Activities Idempotent**
+```typescript
+// Good: Check if work already done
+export async function createUser(userId: string, userData: UserData) {
+  const existing = await db.users.findOne({ userId });
+  if (existing) return existing;
+  
+  return await db.users.create({ userId, ...userData });
+}
+```
+
+2. **Use Appropriate Timeouts**
+```typescript
+// Good: Set realistic timeouts
+{
+  startToCloseTimeout: '5 minutes', // Activity should complete in 5 min
+  scheduleToCloseTimeout: '30 minutes', // Including all retries
+}
+```
+
+3. **Report Progress with Heartbeats**
+```typescript
+// Good: Regular heartbeats for long operations
+for (const item of items) {
+  await processItem(item);
+  heartbeat({ processed: items.indexOf(item) + 1 });
+}
+```
+
+4. **Handle Errors Explicitly**
+```typescript
+// Good: Distinguish retryable vs non-retryable errors
+if (error.code === 'VALIDATION_ERROR') {
+  throw ApplicationFailure.nonRetryable(error.message, 'ValidationError');
+}
+throw error; // Retryable
+```
+
+5. **Log Appropriately**
+```typescript
+// Good: Structured logging
+console.log('Processing order', { orderId, 
+```
+
+### ❌ DON'T
+
+1. **Don't Assume Single Execution**
+```typescript
+// Bad: Non-idempotent
+export async function incrementCounter() {
+  counter++; // Will be called multiple times on retry
+}
+
+// Good: Idempotent
+export async function incrementCounter(counterId: string) {
+  await db.counters.increment({ id: counterId }, 1);
+}
+```
+
+2. **Don't Ignore Timeouts**
+```typescript
+// Bad: No timeout
+export async function callApi() {
+  return fetch(url); // Could hang forever
+}
+
+// Good: With timeout
+export async function callApi() {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 30000);
+  return fetch(url, { signal: controller.signal });
+}
+```
+
+3. **Don't Swallow Errors**
+```typescript
+// Bad: Silent failure
+try {
+  await criticalOperation();
+} catch (error) {
+  console.log('Error occurred');
+  return null; // Hides the failure
+}
+
+// Good: Propagate errors
+try {
+  await criticalOperation();
+} catch (error) {
+  console.error('Critical operation failed', { error });
+  throw error; // Let Temporal handle retry
+}
+```
+
+4. **Don't Do Heavy Computation**
+```typescript
+// Bad: CPU-intensive work
+export async function complexCalculation(data: number[]) {
+  // 10 minutes of CPU work
+  return data.reduce((acc, n) => acc + Math.pow(n, 100), 0);
+}
+
+// Good: Break into smaller chunks with heartbeats
+export async function complexCalculation(data: number[]) {
+  let result = 0;
+  for (let i = 0; i < data.length; i++) {
+    result += Math.pow(data[i], 100);
+    if (i % 1000 === 0) heartbeat({ progress: i });
+  }
+  return result;
+}
+```
+
+## Activity Testing
+
+### Unit Testing
+
+```typescript
+// TypeScript Example
+import { sendEmail } from './activities';
+
+// Mock external dependencies
+jest.mock('nodemailer');
+
+describe('sendEmail activity', () => {
+  it('sends email successfully', async () => {
+    await expect(
+      sendEmail('test@example.com', 'Subject', 'Body')
+    ).resolves.not.toThrow();
+  });
+  
+  it('handles send failure', async () => {
+    // Mock failure
+    nodemailer.createTransport.mockImplementation(() => ({
+      sendMail: jest.fn().mockRejectedValue(new Error('SMTP error'))
+    }));
+    
+    await expect(
+      sendEmail('test@example.com', 'Subject', 'Body')
+    ).rejects.toThrow('SMTP error');
+  });
+});
+```
+
+```python
+# Python Example
+import pytest
+from unittest.mock import AsyncMock, patch
+from activities import send_email
+
+@pytest.mark.asyncio
+async def test_send_email_success():
+    with patch('httpx.AsyncClient') as mock_client:
+        mock_client.return_value.__aenter__.return_value.post = AsyncMock()
+        
+        await send_email("test@example.com", "Subject", "Body")
+        
+        mock_client.return_value.__aenter__.return_value.post.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_send_email_failure():
+    with patch('httpx.AsyncClient') as mock_client:
+        mock_client.return_value.__aenter__.return_value.post = AsyncMock(
+            side_effect=Exception("API error")
+        )
+        
+        with pytest.raises(Exception):
+            await send_email("test@example.com", "Subject", "Body")
+```
+
+## Common Activity Patterns Summary
+
+| Pattern | When to Use | Key Feature |
+|---------|-------------|-------------|
+| Simple Activity | Quick operations | Basic external interaction |
+| Retry Logic | Transient failures | Automatic retries with backoff |
+| Heartbeat | Long-running (>1 min) | Progress tracking |
+| Idempotent | Any activity | Safe retries |
+| Cancellation | Resource cleanup | Graceful termination |
+| Batch Processing | Multiple items | Efficient processing |
+| Resume on Failure | Downloads/uploads | Continue from checkpoint |
+| External Integration | Third-party APIs | Proper error handling |
+
+## Performance Considerations
+
+### Activity Pool Sizing
+```typescript
+// Configure worker with activity pool
+const worker = await Worker.create({
+  taskQueue: 'my-queue',
+  activities,
+  maxConcurrentActivityTaskExecutions: 100, // Concurrent activities
+});
+```
+
+### Resource Management
+```typescript
+// Use connection pooling
+const pool = new DatabasePool({
+  max: 20,
+  min: 5,
+});
+
+export async function queryDatabase(query: string) {
+  const connection = await pool.acquire();
+  try {
+    return await connection.query(query);
+  } finally {
+    pool.release(connection);
+  }
+}
+```
+
+## Monitoring Activities
+
+### Metrics to Track
+- Activity success/failure rate
+- Activity duration
+- Retry count
+- Queue time
+- Heartbeat timeouts
+
+### Logging Best Practices
+```typescript
+// Structured logging
+console.log(JSON.stringify({
+  level: 'info',
+  activityType: 'processOrder',
+  orderId,
+  duration: Date.now() - startTime,
+  
+}));
+```
+
+→ See `temporal-workflows.mdc` for how to call activities
+→ See `temporal-error-handling.mdc` for comprehensive error strategies
+→ See `temporal-testing.mdc` for advanced testing patterns
+

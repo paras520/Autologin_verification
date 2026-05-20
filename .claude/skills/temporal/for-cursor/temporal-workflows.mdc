@@ -1,0 +1,950 @@
+# Temporal Workflows - Complete Implementation Guide
+
+**CRITICAL: ALL implementations MUST include Runtime Kill Switch**
+
+## Runtime Kill Switch (MANDATORY)
+
+**Environment Variable:** `TEMPORAL_STATE` (set in module's `.env` file)  
+**Values:** `ON` | `OFF`  
+**Default:** `ON` (if not set)
+
+**Every service/controller calling Temporal workflows MUST check this variable FIRST:**
+
+```java
+// Java Example - Controller with Kill Switch
+@RestController
+public class OrderController {
+    @Autowired
+    private OrderService orderService;
+    
+    @Autowired
+    private OrderWorkflowClient temporalClient;
+    
+    @Autowired
+    private Environment env;
+    
+    @PostMapping("/api/orders")
+    public ResponseEntity<OrderResult> createOrder(@RequestBody OrderRequest request) {
+        // ✅ MANDATORY: Check kill switch FIRST
+        String temporalState = env.getProperty("TEMPORAL_STATE", "ON").toUpperCase();
+        
+        if ("OFF".equals(temporalState)) {
+            // Temporal DISABLED - bypass, execute directly
+            logger.warn("Temporal bypassed - TEMPORAL_STATE=OFF in .env");
+            return ResponseEntity.ok(orderService.processOrderDirect(request));
+        } else {
+            // Temporal ENABLED - execute via workflow
+            return ResponseEntity.ok(temporalClient.executeOrderWorkflow(request));
+        }
+    }
+}
+```
+
+```typescript
+// TypeScript Example - Service with Kill Switch
+export class PaymentService {
+  async processPayment(paymentId: string): Promise<PaymentResult> {
+    // ✅ MANDATORY: Check kill switch FIRST
+    const temporalState = (process.env.TEMPORAL_STATE || 'ON').toUpperCase();
+    
+    if (temporalState === 'OFF') {
+      // Temporal DISABLED - bypass, execute directly
+      console.warn('Temporal bypassed - TEMPORAL_STATE=OFF in .env');
+      return this.processPaymentDirect(paymentId);
+    } else {
+      // Temporal ENABLED - execute via workflow
+      return this.executePaymentWorkflow(paymentId);
+    }
+  }
+  
+  private async processPaymentDirect(paymentId: string): Promise<PaymentResult> {
+    // Direct execution (original business logic)
+    const payment = await this.paymentRepo.findById(paymentId);
+    const result = await this.stripeClient.charge(payment);
+    await this.notificationService.sendConfirmation(payment);
+    return result;
+  }
+  
+  private async executePaymentWorkflow(paymentId: string): Promise<PaymentResult> {
+    // Temporal workflow execution
+    const client = await getTemporalClient();
+    const handle = await client.workflow.start(paymentWorkflow, {
+      args: [paymentId],
+      taskQueue: 'payments',
+      workflowId: `payment-${paymentId}`,
+    });
+    return await handle.result();
+  }
+}
+```
+
+```python
+# Python Example - Service with Kill Switch
+import os
+import logging
+
+class DataProcessor:
+    async def process_data(self, data_id: str) -> ProcessResult:
+        # ✅ MANDATORY: Check kill switch FIRST
+        temporal_state = os.getenv('TEMPORAL_STATE', 'ON').upper()
+        
+        if temporal_state == 'OFF':
+            # Temporal DISABLED - bypass, execute directly
+            logging.warning("Temporal bypassed - TEMPORAL_STATE=OFF in .env")
+            return await self.process_data_direct(data_id)
+        else:
+            # Temporal ENABLED - execute via workflow
+            return await self.execute_data_workflow(data_id)
+    
+    async def process_data_direct(self, data_id: str) -> ProcessResult:
+        # Direct execution (original business logic)
+        data = await self.data_repo.get(data_id)
+        processed = await self.processor.transform(data)
+        await self.storage.save(processed)
+        return ProcessResult(status="success", data_id=data_id)
+    
+    async def execute_data_workflow(self, data_id: str) -> ProcessResult:
+        # Temporal workflow execution
+        client = await get_temporal_client()
+        result = await client.execute_workflow(
+            DataProcessingWorkflow.run,
+            data_id,
+            id=f"data-{data_id}",
+            task_queue="data-processing"
+        )
+        return result
+```
+
+**Use Cases for Kill Switch:**
+1. **Emergency Bypass:** Temporal cluster down → Set `TEMPORAL_STATE=OFF` temporarily
+2. **Testing:** Test business logic without Temporal overhead
+3. **Gradual Rollout:** Enable per environment (dev=OFF, staging=ON, prod=ON)
+4. **Debugging:** Isolate issues by bypassing Temporal
+5. **Cost Control:** Disable in non-critical environments
+
+**Benefits:**
+- ✅ NO code redeployment required (just env var + app restart)
+- ✅ Instant failover to direct execution
+- ✅ Zero business logic changes
+- ✅ Reversible instantly (set back to ON)
+- ✅ Per-environment control
+
+---
+
+## What is a Workflow?
+
+A **Workflow** is the core orchestration unit in Temporal. It defines the business logic that coordinates activities, manages state, and handles the overall flow of your application.
+
+### Key Characteristics
+
+✅ **Durable**: Survives process crashes and restarts
+✅ **Deterministic**: Must produce the same output given the same input
+✅ **Long-Running**: Can run for seconds, days, months, or years
+✅ **Versioned**: Supports safe code updates
+✅ **Observable**: Full execution history available
+✅ **Testable**: Can be tested like regular code
+
+## Workflow Constraints
+
+### ✅ ALLOWED in Workflows
+- Calling activities
+- Starting child workflows
+- Setting timers
+- Using signals and queries
+- Deterministic logic
+- Reading workflow input
+- Accessing workflow info
+
+### ❌ FORBIDDEN in Workflows
+- Direct I/O operations (network, disk, database)
+- Non-deterministic operations (random numbers, UUID generation)
+- System time access (use workflow time instead)
+- Threading/async primitives (use workflow APIs)
+- External state access
+- Mutable global variables
+
+## Workflow Definition Patterns
+
+### Pattern 1: Simple Sequential Workflow
+
+**Use Case**: Execute activities one after another
+
+```typescript
+// TypeScript Example
+import { proxyActivities } from '@temporalio/workflow';
+import type * as activities from './activities';
+
+const { processPayment, sendConfirmation } = proxyActivities<typeof activities>({
+  startToCloseTimeout: '1 minute',
+});
+
+export async function orderWorkflow(orderId: string): Promise<string> {
+  // Step 1: Process payment
+  const paymentResult = await processPayment(orderId);
+  
+  // Step 2: Send confirmation
+  await sendConfirmation(orderId, paymentResult.transactionId);
+  
+  return 'Order completed';
+}
+```
+
+```python
+# Python Example
+from temporalio import workflow
+from datetime import timedelta
+
+@workflow.defn
+class OrderWorkflow:
+    @workflow.run
+    async def run(self, order_id: str) -> str:
+        # Step 1: Process payment
+        payment_result = await workflow.execute_activity(
+            process_payment,
+            order_id,
+            start_to_close_timeout=timedelta(minutes=1)
+        )
+        
+        # Step 2: Send confirmation
+        await workflow.execute_activity(
+            send_confirmation,
+            order_id,
+            payment_result.transaction_id,
+            start_to_close_timeout=timedelta(minutes=1)
+        )
+        
+        return "Order completed"
+```
+
+```go
+// Go Example
+package workflows
+
+import (
+    "time"
+    "go.temporal.io/sdk/workflow"
+)
+
+func OrderWorkflow(ctx workflow.Context, orderID string) (string, error) {
+    ao := workflow.ActivityOptions{
+        StartToCloseTimeout: time.Minute,
+    }
+    ctx = workflow.WithActivityOptions(ctx, ao)
+    
+    // Step 1: Process payment
+    var paymentResult PaymentResult
+    err := workflow.ExecuteActivity(ctx, ProcessPayment, orderID).Get(ctx, &paymentResult)
+    if err != nil {
+        return "", err
+    }
+    
+    // Step 2: Send confirmation
+    err = workflow.ExecuteActivity(ctx, SendConfirmation, orderID, paymentResult.TransactionID).Get(ctx, nil)
+    if err != nil {
+        return "", err
+    }
+    
+    return "Order completed", nil
+}
+```
+
+```java
+// Java Example
+@WorkflowInterface
+public interface OrderWorkflow {
+    @WorkflowMethod
+    String processOrder(String orderId);
+}
+
+public class OrderWorkflowImpl implements OrderWorkflow {
+    private final OrderActivities activities = 
+        Workflow.newActivityStub(OrderActivities.class,
+            ActivityOptions.newBuilder()
+                .setStartToCloseTimeout(Duration.ofMinutes(1))
+                .build());
+    
+    @Override
+    public String processOrder(String orderId) {
+        // Step 1: Process payment
+        PaymentResult paymentResult = activities.processPayment(orderId);
+        
+        // Step 2: Send confirmation
+        activities.sendConfirmation(orderId, paymentResult.getTransactionId());
+        
+        return "Order completed";
+    }
+}
+```
+
+### Pattern 2: Parallel Execution (Fan-Out/Fan-In)
+
+**Use Case**: Execute multiple activities in parallel, wait for all
+
+```typescript
+// TypeScript Example
+export async function dataProcessingWorkflow(fileIds: string[]): Promise<string[]> {
+  const { processFile } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '5 minutes',
+  });
+  
+  // Execute all file processing in parallel
+  const results = await Promise.all(
+    fileIds.map(fileId => processFile(fileId))
+  );
+  
+  return results;
+}
+```
+
+```python
+# Python Example
+import asyncio
+
+@workflow.defn
+class DataProcessingWorkflow:
+    @workflow.run
+    async def run(self, file_ids: list[str]) -> list[str]:
+        # Execute all file processing in parallel
+        results = await asyncio.gather(*[
+            workflow.execute_activity(
+                process_file,
+                file_id,
+                start_to_close_timeout=timedelta(minutes=5)
+            )
+            for file_id in file_ids
+        ])
+        
+        return results
+```
+
+```go
+// Go Example
+func DataProcessingWorkflow(ctx workflow.Context, fileIDs []string) ([]string, error) {
+    ao := workflow.ActivityOptions{
+        StartToCloseTimeout: 5 * time.Minute,
+    }
+    ctx = workflow.WithActivityOptions(ctx, ao)
+    
+    // Create futures for parallel execution
+    var futures []workflow.Future
+    for _, fileID := range fileIDs {
+        future := workflow.ExecuteActivity(ctx, ProcessFile, fileID)
+        futures = append(futures, future)
+    }
+    
+    // Wait for all to complete
+    var results []string
+    for _, future := range futures {
+        var result string
+        if err := future.Get(ctx, &result); err != nil {
+            return nil, err
+        }
+        results = append(results, result)
+    }
+    
+    return results, nil
+}
+```
+
+### Pattern 3: Conditional Logic
+
+**Use Case**: Different paths based on activity results
+
+```typescript
+// TypeScript Example
+export async function userOnboardingWorkflow(userId: string): Promise<string> {
+  const { validateUser, sendWelcomeEmail, scheduleCall, sendRejectionEmail } = 
+    proxyActivities<typeof activities>({
+      startToCloseTimeout: '2 minutes',
+    });
+  
+  // Validate user
+  const isValid = await validateUser(userId);
+  
+  if (isValid) {
+    // Success path
+    await sendWelcomeEmail(userId);
+    await scheduleCall(userId);
+    return 'User onboarded';
+  } else {
+    // Rejection path
+    await sendRejectionEmail(userId);
+    return 'User rejected';
+  }
+}
+```
+
+### Pattern 4: Retry with Different Strategies
+
+**Use Case**: Custom retry logic for different failure types
+
+```typescript
+// TypeScript Example
+export async function resilientApiCallWorkflow(endpoint: string): Promise<any> {
+  const { callExternalApi } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '30 seconds',
+    retry: {
+      initialInterval: '1s',
+      backoffCoefficient: 2,
+      maximumAttempts: 5,
+      maximumInterval: '1m',
+      nonRetryableErrorTypes: ['InvalidInput', 'Unauthorized'],
+    },
+  });
+  
+  try {
+    return await callExternalApi(endpoint);
+  } catch (error) {
+    // Workflow-level error handling
+    console.log('API call failed after retries:', error);
+    throw error;
+  }
+}
+```
+
+### Pattern 5: Saga Pattern (Compensation)
+
+**Use Case**: Distributed transaction with rollback capability
+
+```typescript
+// TypeScript Example
+export async function bookingWorkflow(bookingData: BookingData): Promise<string> {
+  const activities = proxyActivities<typeof bookingActivities>({
+    startToCloseTimeout: '2 minutes',
+  });
+  
+  let flightBooked = false;
+  let hotelBooked = false;
+  let carBooked = false;
+  
+  try {
+    // Step 1: Book flight
+    await activities.bookFlight(bookingData.flightId);
+    flightBooked = true;
+    
+    // Step 2: Book hotel
+    await activities.bookHotel(bookingData.hotelId);
+    hotelBooked = true;
+    
+    // Step 3: Book rental car
+    await activities.bookCar(bookingData.carId);
+    carBooked = true;
+    
+    // Success - confirm all
+    await activities.confirmBooking(bookingData.bookingId);
+    return 'Booking successful';
+    
+  } catch (error) {
+    // Compensation logic
+    if (carBooked) {
+      await activities.cancelCar(bookingData.carId);
+    }
+    if (hotelBooked) {
+      await activities.cancelHotel(bookingData.hotelId);
+    }
+    if (flightBooked) {
+      await activities.cancelFlight(bookingData.flightId);
+    }
+    
+    throw error; // Re-throw after cleanup
+  }
+}
+```
+
+### Pattern 6: Long-Running Workflow with Updates (2026)
+
+**Use Case**: Workflow that responds to external events with synchronous responses
+
+**Note**: As of 2026, Updates API is preferred over Signals when you need synchronous acknowledgment.
+
+```typescript
+// TypeScript Example - Using Updates API
+import { defineUpdate, defineQuery, setHandler, condition } from '@temporalio/workflow';
+
+const approveUpdate = defineUpdate<string, [string, string]>('approve');
+const rejectUpdate = defineUpdate<string, [string, string]>('reject');
+const statusQuery = defineQuery<string>('status');
+
+export async function approvalWorkflow(requestId: string): Promise<string> {
+  let approved = false;
+  let rejected = false;
+  let approver = '';
+  let status = 'pending';
+  
+  // Set up update handlers (synchronous, validated)
+  setHandler(approveUpdate, (approverName: string, comments: string): string => {
+    if (approved || rejected) {
+      throw new Error('Request already processed');
+    }
+    approved = true;
+    approver = approverName;
+    status = 'approved';
+    return `Approved by ${approverName}`;
+  });
+  
+  setHandler(rejectUpdate, (rejecterName: string, reason: string): string => {
+    if (approved || rejected) {
+      throw new Error('Request already processed');
+    }
+    rejected = true;
+    status = 'rejected';
+    return `Rejected by ${rejecterName}: ${reason}`;
+  });
+  
+  setHandler(statusQuery, () => status);
+  
+  // Wait for approval or rejection (with timeout)
+  const didComplete = await condition(() => approved || rejected, '7 days');
+  
+  if (!didComplete) {
+    status = 'timeout';
+    return 'Request timeout';
+  }
+  
+  if (approved) {
+    const { processApproval } = proxyActivities<typeof activities>({
+      startToCloseTimeout: '1 minute',
+    });
+    await processApproval(requestId, approver);
+    return 'Approved';
+  } else {
+    const { processRejection } = proxyActivities<typeof activities>({
+      startToCloseTimeout: '1 minute',
+    });
+    await processRejection(requestId);
+    return 'Rejected';
+  }
+}
+```
+
+### Pattern 6b: Long-Running Workflow with Signals (Legacy)
+
+**Use Case**: Workflow that responds to external events (asynchronous)
+
+```typescript
+// TypeScript Example
+import { defineSignal, defineQuery, setHandler, condition } from '@temporalio/workflow';
+
+const approveSignal = defineSignal<[string]>('approve');
+const rejectSignal = defineSignal('reject');
+const statusQuery = defineQuery<string>('status');
+
+export async function approvalWorkflow(requestId: string): Promise<string> {
+  let approved = false;
+  let rejected = false;
+  let approver = '';
+  let status = 'pending';
+  
+  // Set up signal handlers
+  setHandler(approveSignal, (approverName: string) => {
+    approved = true;
+    approver = approverName;
+    status = 'approved';
+  });
+  
+  setHandler(rejectSignal, () => {
+    rejected = true;
+    status = 'rejected';
+  });
+  
+  setHandler(statusQuery, () => status);
+  
+  // Wait for approval or rejection (with timeout)
+  const didComplete = await condition(() => approved || rejected, '7 days');
+  
+  if (!didComplete) {
+    status = 'timeout';
+    return 'Request timeout';
+  }
+  
+  if (approved) {
+    const { processApproval } = proxyActivities<typeof activities>({
+      startToCloseTimeout: '1 minute',
+    });
+    await processApproval(requestId, approver);
+    return 'Approved';
+  } else {
+    const { processRejection } = proxyActivities<typeof activities>({
+      startToCloseTimeout: '1 minute',
+    });
+    await processRejection(requestId);
+    return 'Rejected';
+  }
+}
+```
+
+```python
+# Python Example
+from temporalio import workflow
+
+@workflow.defn
+class ApprovalWorkflow:
+    def __init__(self):
+        self.approved = False
+        self.rejected = False
+        self.approver = ""
+        self.status = "pending"
+    
+    @workflow.run
+    async def run(self, request_id: str) -> str:
+        # Wait for approval or rejection (with timeout)
+        await workflow.wait_condition(
+            lambda: self.approved or self.rejected,
+            timeout=timedelta(days=7)
+        )
+        
+        if self.approved:
+            await workflow.execute_activity(
+                process_approval,
+                request_id,
+                self.approver,
+                start_to_close_timeout=timedelta(minutes=1)
+            )
+            return "Approved"
+        elif self.rejected:
+            await workflow.execute_activity(
+                process_rejection,
+                request_id,
+                start_to_close_timeout=timedelta(minutes=1)
+            )
+            return "Rejected"
+        else:
+            self.status = "timeout"
+            return "Request timeout"
+    
+    @workflow.signal
+    async def approve(self, approver_name: str):
+        self.approved = True
+        self.approver = approver_name
+        self.status = "approved"
+    
+    @workflow.signal
+    async def reject(self):
+        self.rejected = True
+        self.status = "rejected"
+    
+    @workflow.query
+    def status_query(self) -> str:
+        return self.status
+```
+
+### Pattern 7: Child Workflows
+
+**Use Case**: Compose workflows hierarchically
+
+```typescript
+// TypeScript Example
+
+// Parent workflow
+export async function orderFulfillmentWorkflow(orderId: string): Promise<string> {
+  const { validateOrder } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '1 minute',
+  });
+  
+  // Validate order first
+  const isValid = await validateOrder(orderId);
+  if (!isValid) {
+    throw new Error('Invalid order');
+  }
+  
+  // Start child workflows in parallel
+  const [paymentResult, inventoryResult] = await Promise.all([
+    startChild(paymentProcessingWorkflow, {
+      args: [orderId],
+      workflowId: `payment-${orderId}`,
+    }),
+    startChild(inventoryManagementWorkflow, {
+      args: [orderId],
+      workflowId: `inventory-${orderId}`,
+    }),
+  ]);
+  
+  // Start shipping workflow after payment and inventory are confirmed
+  const shippingResult = await startChild(shippingWorkflow, {
+    args: [orderId, paymentResult.transactionId],
+    workflowId: `shipping-${orderId}`,
+  });
+  
+  return `Order fulfilled: ${shippingResult.trackingNumber}`;
+}
+
+// Child workflow example
+export async function paymentProcessingWorkflow(orderId: string): Promise<PaymentResult> {
+  const { chargeCard, updatePaymentStatus } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '2 minutes',
+  });
+  
+  const result = await chargeCard(orderId);
+  await updatePaymentStatus(orderId, 'completed');
+  
+  return result;
+}
+```
+
+### Pattern 8: Scheduled/Cron Workflow
+
+**Use Case**: Recurring tasks on a schedule
+
+```typescript
+// TypeScript Example
+export async function dailyReportWorkflow(): Promise<void> {
+  const { generateReport, sendReport } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '10 minutes',
+  });
+  
+  const report = await generateReport(new Date());
+  await sendReport(report);
+}
+
+// Started with cron schedule
+// Client code:
+// await client.workflow.start(dailyReportWorkflow, {
+//   taskQueue: 'reports',
+//   workflowId: 'daily-report',
+//   cronSchedule: '0 9 * * *', // Every day at 9 AM
+// });
+```
+
+### Pattern 9: Infinite Workflow (Continue-As-New)
+
+**Use Case**: Workflows that run indefinitely
+
+```typescript
+// TypeScript Example
+import { continueAsNew, sleep } from '@temporalio/workflow';
+
+export async function subscriptionMonitoringWorkflow(
+  subscriptionId: string,
+  iteration: number = 0
+): Promise<void> {
+  const { checkSubscriptionStatus, notifyExpiry } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '1 minute',
+  });
+  
+  // Check subscription status
+  const status = await checkSubscriptionStatus(subscriptionId);
+  
+  if (status === 'expired') {
+    await notifyExpiry(subscriptionId);
+    return; // End workflow
+  }
+  
+  // Sleep for 1 day
+  await sleep('1 day');
+  
+  // Continue as new to avoid history growth
+  if (iteration >= 30) { // Every 30 days, continue as new
+    await continueAsNew<typeof subscriptionMonitoringWorkflow>(subscriptionId, 0);
+  } else {
+    await continueAsNew<typeof subscriptionMonitoringWorkflow>(subscriptionId, iteration + 1);
+  }
+}
+```
+
+### Pattern 10: Rate Limiting
+
+**Use Case**: Control execution rate of activities
+
+```typescript
+// TypeScript Example
+export async function bulkEmailWorkflow(emailAddresses: string[]): Promise<void> {
+  const { sendEmail } = proxyActivities<typeof activities>({
+    startToCloseTimeout: '30 seconds',
+  });
+  
+  // Send emails with rate limiting (max 10 per second)
+  const batchSize = 10;
+  for (let i = 0; i < emailAddresses.length; i += batchSize) {
+    const batch = emailAddresses.slice(i, i + batchSize);
+    
+    // Process batch in parallel
+    await Promise.all(batch.map(email => sendEmail(email)));
+    
+    // Wait 1 second before next batch (rate limiting)
+    if (i + batchSize < emailAddresses.length) {
+      await sleep('1 second');
+    }
+  }
+}
+```
+
+## Workflow Configuration Options
+
+### Timeouts
+
+```typescript
+// Workflow execution timeout
+{
+  workflowExecutionTimeout: '30 days', // Total workflow duration
+  workflowRunTimeout: '24 hours',      // Single workflow run
+  workflowTaskTimeout: '10 seconds',   // Decision task timeout
+}
+```
+
+### Retry Policy
+
+```typescript
+{
+  retry: {
+    initialInterval: '1s',
+    backoffCoefficient: 2.0,
+    maximumAttempts: 10,
+    maximumInterval: '100s',
+    nonRetryableErrorTypes: ['BadRequest'],
+  }
+}
+```
+
+### Search Attributes
+
+```typescript
+// Add searchable metadata to workflows
+import { upsertSearchAttributes } from '@temporalio/workflow';
+
+upsertSearchAttributes({
+  CustomerId: ['customer-123'],
+  OrderAmount: [1500],
+  Order
+});
+```
+
+## Workflow Versioning
+
+### Safe Code Updates
+
+```typescript
+// Version 1 (initial)
+export async function myWorkflow(): Promise<string> {
+  const result = await activity1();
+  return result;
+}
+
+// Version 2 (add new activity)
+import { patched } from '@temporalio/workflow';
+
+export async function myWorkflow(): Promise<string> {
+  const result = await activity1();
+  
+  // Only run for new workflow executions
+  if (patched('add-activity2')) {
+    await activity2();
+  }
+  
+  return result;
+}
+```
+
+## Workflow Best Practices
+
+### ✅ DO
+1. Keep workflows deterministic
+2. Use activities for all side effects
+3. Set appropriate timeouts
+4. Version workflow changes
+5. Use signals for external events
+6. Implement idempotent activities
+7. Use child workflows for modularity
+8. Add search attributes for filtering
+9. Use continue-as-new for long-running workflows
+10. Test workflows thoroughly
+
+### ❌ DON'T
+1. Make direct API/DB calls in workflows
+2. Use system time (use workflow.now())
+3. Generate random values
+4. Use mutable globals
+5. Ignore timeout configuration
+6. Deploy breaking changes without versioning
+7. Store large data in workflow history
+8. Use threading primitives
+9. Access file system
+10. Rely on execution order of parallel activities
+
+## Testing Workflows
+
+```typescript
+// TypeScript Example
+import { TestWorkflowEnvironment } from '@temporalio/testing';
+import { Worker } from '@temporalio/worker';
+import { orderWorkflow } from './workflows';
+import * as activities from './activities';
+
+describe('Order Workflow', () => {
+  let testEnv: TestWorkflowEnvironment;
+  
+  beforeAll(async () => {
+    testEnv = await TestWorkflowEnvironment.createLocal();
+  });
+  
+  afterAll(async () => {
+    await testEnv?.teardown();
+  });
+  
+  it('completes order successfully', async () => {
+    const { client, nativeConnection } = testEnv;
+    
+    const worker = await Worker.create({
+      connection: nativeConnection,
+      taskQueue: 'test',
+      workflowsPath: require.resolve('./workflows'),
+      activities,
+    });
+    
+    await worker.runUntil(async () => {
+      const result = await client.workflow.execute(orderWorkflow, {
+        args: ['order-123'],
+        workflowId: 'test-order',
+        taskQueue: 'test',
+      });
+      
+      expect(result).toBe('Order completed');
+    });
+  });
+});
+```
+
+## Monitoring & Debugging
+
+### Logging in Workflows
+
+```typescript
+import { log } from '@temporalio/workflow';
+
+export async function myWorkflow(id: string): Promise<void> {
+  log.info('Workflow started', { workflowId: id });
+  
+  try {
+    await someActivity();
+    log.info('Activity completed');
+  } catch (error) {
+    log.error('Activity failed', { error });
+    throw error;
+  }
+}
+```
+
+### Metrics
+
+```typescript
+// Automatically collected:
+// - workflow_start_count
+// - workflow_completed_count
+// - workflow_failed_count
+// - workflow_execution_time
+```
+
+## Common Pitfalls & Solutions
+
+| Pitfall | Solution |
+|---------|----------|
+| Non-deterministic code | Use workflow.now() instead of Date.now() |
+| Large workflow history | Use continue-as-new |
+| Long-running activities | Add heartbeats |
+| Workflows not completing | Check timeout configurations |
+| Breaking changes | Use workflow versioning |
+| Lost signals | Use buffered signals or queries |
+
+→ See `temporal-activities.mdc` for activity implementation
+→ See `temporal-error-handling.mdc` for error handling patterns
+→ See `temporal-testing.mdc` for comprehensive testing strategies
+

@@ -101,7 +101,7 @@ class VerificationController:
             verification_inputs = [
                 VerificationInput(
                     url=row.get("login_url") or "",
-                    provider=row.get("cb_link_id") or "",
+                    provider=row.get("display_name") or row.get("login_service") or row.get("cb_link_id") or "",
                     service_name=row.get("login_service") or "",
                     login_type="direct",
                     country="india",
@@ -277,7 +277,12 @@ class VerificationController:
         payload: BatchCheckRequest,
         background_tasks: BackgroundTasks,
     ) -> AsyncBatchResponse:
-        """Create an activity_run record and queue background verification."""
+        """Create an activity_run record and queue background verification.
+
+        When TEMPORAL_STATE=ON, each cb_link_id is enqueued into the singleton
+        VerificationQueueWorkflow via signal (durable, retryable, visible in
+        Temporal UI).  When TEMPORAL_STATE=OFF, falls back to inline background task.
+        """
         try:
             run_id = await create_activity_run(
                 cb_link_ids=payload.cb_link_ids,
@@ -290,8 +295,42 @@ class VerificationController:
                 detail="Could not initialise verification run in database.",
             ) from exc
 
-        background_tasks.add_task(self._run_verification_background, run_id, payload)
+        if _temporal_enabled():
+            await self._enqueue_temporal(payload, run_id)
+        else:
+            background_tasks.add_task(self._run_verification_background, run_id, payload)
+
         return AsyncBatchResponse(run_id=run_id, total_links=len(payload.cb_link_ids))
+
+    async def _enqueue_temporal(self, payload: BatchCheckRequest, run_id: str) -> None:
+        """Signal the singleton VerificationQueueWorkflow with each cb_link_id."""
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        from temporal.client.client import get_temporal_client  # noqa: PLC0415
+        from temporal.config.settings import QUEUE_WORKFLOW_ID  # noqa: PLC0415
+        from temporal.workflows.queue_workflow import QueueItem, VerificationQueueWorkflow  # noqa: PLC0415
+
+        client = await get_temporal_client()
+        handle = client.get_workflow_handle(QUEUE_WORKFLOW_ID)
+
+        for cb_link_id in payload.cb_link_ids:
+            try:
+                await handle.signal(
+                    VerificationQueueWorkflow.enqueue_signal,
+                    QueueItem(
+                        cb_link_id=cb_link_id,
+                        include_inactive=payload.include_inactive,
+                        queued_at=datetime.now(timezone.utc).isoformat(),
+                        run_id=run_id,
+                        triggered_by=payload.triggered_by or "m114",
+                        total_in_run=len(payload.cb_link_ids),
+                    ),
+                )
+                logger.info("[async] enqueued cb_link_id=%s run_id=%s", cb_link_id, run_id)
+            except Exception as exc:
+                logger.error(
+                    "[async] failed to enqueue cb_link_id=%s: %s", cb_link_id, exc, exc_info=True
+                )
 
     async def _run_verification_background(
         self,
