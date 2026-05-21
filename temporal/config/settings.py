@@ -5,18 +5,19 @@ from datetime import timedelta
 
 from temporalio.common import RetryPolicy
 
+from src.config import config
+
 # ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
-TEMPORAL_HOST: str = os.getenv("TEMPORAL_URI", "localhost:7233")
-TEMPORAL_NAMESPACE: str = os.getenv("TEMPORAL_NAMESPACE", "default")
+TEMPORAL_HOST: str = config.temporal_uri
+TEMPORAL_NAMESPACE: str = config.temporal_namespace
 TEMPORAL_API_KEY: str | None = os.getenv("TEMPORAL_API_KEY")  # None → no TLS/auth (local dev)
 
 # ---------------------------------------------------------------------------
-# Kill switch — set TEMPORAL_STATE=OFF to bypass Temporal and run inline
+# Kill switch — toggled via temporalEnabled in app.config.json or TEMPORAL_STATE env var
 # ---------------------------------------------------------------------------
-TEMPORAL_STATE: str = os.getenv("TEMPORAL_STATE", "ON").upper()
-TEMPORAL_ENABLED: bool = TEMPORAL_STATE == "ON"
+TEMPORAL_ENABLED: bool = config.temporal_enabled
 
 # ---------------------------------------------------------------------------
 # Task queues

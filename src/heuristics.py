@@ -19,6 +19,8 @@ import logging
 import os
 import re
 from urllib.parse import urlparse
+
+from src.config import config
 try:
     import tldextract
 except ImportError:
@@ -201,7 +203,7 @@ async def classify_customer_facing(
     on HIGH confidence non-customer verdicts, so this guarantees no false
     deletion when the classifier itself is unavailable.
     """
-    prompt_path = os.getenv("LANGFUSE_CUSTOMER_FACING_PROMPT", DEFAULT_CUSTOMER_FACING_PROMPT)
+    prompt_path = config.langfuse_customer_facing_prompt
 
     if not _langfuse_is_configured():
         msg = "[customer-facing] Langfuse not configured — skipping classifier (fail-open)"
@@ -235,7 +237,7 @@ async def classify_customer_facing(
             _load_langfuse_helpers()
         )
 
-        system_prompt, user_prompt, config, prompt_obj = get_prompts_from_langfuse(
+        system_prompt, user_prompt, llm_config, prompt_obj = get_prompts_from_langfuse(
             prompt_path=prompt_path,
             session_id=inner_session_id,
             variables=variables,
@@ -244,7 +246,7 @@ async def classify_customer_facing(
         messages = build_messages(system_prompt=system_prompt, user_prompt=user_prompt)
 
         response = await call_litellm(
-            config=config,
+            config=llm_config,
             messages=messages,
             session_id=inner_session_id,
             api_endpoint="/check/customer_facing",
@@ -348,7 +350,7 @@ async def extract_and_score(
         "notes": [],
     }
 
-    prompt_path = os.getenv("LANGFUSE_EXTRACTOR_PROMPT", DEFAULT_EXTRACTOR_PROMPT)
+    prompt_path = config.langfuse_extractor_prompt
 
     if not _langfuse_is_configured():
         msg = "[extractor] Langfuse not configured — LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST missing"
@@ -382,7 +384,7 @@ async def extract_and_score(
             _load_langfuse_helpers()
         )
 
-        system_prompt, user_prompt, config, prompt_obj = get_prompts_from_langfuse(
+        system_prompt, user_prompt, llm_config, prompt_obj = get_prompts_from_langfuse(
             prompt_path=prompt_path,
             session_id=session_id,
             variables=variables,
@@ -391,7 +393,7 @@ async def extract_and_score(
         messages = build_messages(system_prompt=system_prompt, user_prompt=user_prompt)
 
         response = await call_litellm(
-            config=config,
+            config=llm_config,
             messages=messages,
             session_id=session_id,
             api_endpoint="/check/extractor",
@@ -498,7 +500,7 @@ async def assess_match_with_identifiers(
         _SKIP["notes"].append("provider/service match skipped — both fields empty")
         return _SKIP
 
-    prompt_path = os.getenv("LANGFUSE_PROVIDER_MATCH_PROMPT", DEFAULT_PROVIDER_MATCH_PROMPT)
+    prompt_path = config.langfuse_provider_match_prompt
 
     if not _langfuse_is_configured():
         msg = "[match] Langfuse not configured — LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST missing"
@@ -527,7 +529,7 @@ async def assess_match_with_identifiers(
             _load_langfuse_helpers()
         )
 
-        system_prompt, user_prompt, config, prompt_obj = get_prompts_from_langfuse(
+        system_prompt, user_prompt, llm_config, prompt_obj = get_prompts_from_langfuse(
             prompt_path=prompt_path,
             session_id=session_id,
             variables=variables,
@@ -536,7 +538,7 @@ async def assess_match_with_identifiers(
         messages = build_messages(system_prompt=system_prompt, user_prompt=user_prompt)
 
         response = await call_litellm(
-            config=config,
+            config=llm_config,
             messages=messages,
             session_id=session_id,
             api_endpoint="/check/match",

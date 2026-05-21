@@ -1,0 +1,45 @@
+{
+  "defaults": {
+    "port": 5000,
+    "uvicornHost": "0.0.0.0",
+    "temporalEnabled": true,
+    "langfusePromptLabel": "production",
+    "langfuseExtractorPrompt": "autologinQA/identifier_extractor",
+    "langfuseProviderMatchPrompt": "autologinQA/service_matcher",
+    "langfuseCustomerFacingPrompt": "autologinQA/customer_facing_classifier",
+    "bifrostAuthScheme": "Basic",
+    "bifrostModel": "vertex/gemini-2.5-flash",
+    "bifrostTags": "autourl_qa, service link verification",
+    "logLevel": "INFO"
+  },
+  "environments": {
+    "local": {
+      "uvicornHost": "127.0.0.1",
+      "m103BaseUrl": "http://127.0.0.1:8001",
+      "temporalUri": "localhost:7233",
+      "temporalNamespace": "default",
+      "temporalEnabled": false,
+      "langfusePromptLabel": "latest"
+    },
+    "stage1": {
+      "m103BaseUrl": "https://api1.diro.live",
+      "temporalUri": "temporal-external.diro.live:7233",
+      "temporalNamespace": "stage1",
+      "langfusePromptLabel": "latest",
+      "bifrostProxy": "https://your-bifrost-stage1.run.app"
+    },
+    "stage2": {
+      "m103BaseUrl": "https://api2.diro.live",
+      "temporalUri": "temporal-external.diro.live:7233",
+      "temporalNamespace": "stage2",
+      "langfusePromptLabel": "latest",
+      "bifrostProxy": "https://your-bifrost-stage2.run.app"
+    },
+    "prod": {
+      "m103BaseUrl": "https://api.diro.io",
+      "temporalUri": "temporal-external.diro.io:7233",
+      "temporalNamespace": "production",
+      "bifrostProxy": "https://your-bifrost-prod.run.app"
+    }
+  }
+}

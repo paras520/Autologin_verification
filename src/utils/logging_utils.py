@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
-import os
+
+from src.config import config
 
 
 def configure_logging() -> logging.Logger:
-    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level = config.log_level
     root_logger = logging.getLogger()
 
     if not root_logger.handlers:

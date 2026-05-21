@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import logging
-import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,11 +23,13 @@ if sys.platform == "win32":
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
+from src.config import config  # noqa: E402
 from src.routers.verification_router import router as verification_router  # noqa: E402
 from src.utils.logging_utils import configure_logging  # noqa: E402
 
 configure_logging()
 logger = logging.getLogger("autologin.app")
+logger.info("Starting autologin_verification [env=%s]", config.app_env)
 
 
 @asynccontextmanager
@@ -74,7 +75,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         "app:app",
-        host=os.getenv("UVICORN_HOST", "127.0.0.1"),
-        port=int(os.getenv("UVICORN_PORT", "5000")),
+        host=config.uvicorn_host,
+        port=config.port,
         loop="asyncio",
     )

@@ -11,9 +11,10 @@ Required env var:
 from __future__ import annotations
 
 import logging
-import os
 
 import httpx
+
+from src.config import config
 
 from src.models.response_models import BatchCheckResponse
 
@@ -28,8 +29,7 @@ async def ingest_to_m103(
     triggered_by: str | None,
 ) -> None:
     """POST verification results to m103.  Non-fatal — logs on failure."""
-    base_url = os.getenv("M103_BASE_URL", "http://127.0.0.1:8001").rstrip("/")
-    endpoint = base_url + _INGEST_PATH
+    endpoint = config.m103_base_url + _INGEST_PATH
 
     payload = {
         "results": [

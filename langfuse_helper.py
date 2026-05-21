@@ -40,6 +40,8 @@ from typing import Any
 
 import httpx
 
+from src.config import config as app_config
+
 logger = logging.getLogger("autologin.langfuse_helper")
 
 
@@ -84,19 +86,19 @@ _BIFROST_PATH = "/v1/chat/completions"
 
 
 def _bifrost_url() -> str:
-    base = (os.getenv("BIFROST_PROXY") or "").rstrip("/")
-    # Normalise: BIFROST_PROXY may or may not include the /v1 segment
+    base = app_config.bifrost_proxy
+    # Normalise: bifrostProxy may or may not include the /v1 segment
     if base.endswith("/v1"):
         base = base[:-3]
     if not base:
         raise RuntimeError(
-            "BIFROST_PROXY env var is required (e.g. https://llm-proxy.diro.live)"
+            "bifrostProxy must be set in app.config.json or BIFROST_PROXY env var"
         )
     return f"{base}{_BIFROST_PATH}"
 
 
 def _bifrost_auth_header() -> str:
-    scheme = (os.getenv("BIFROST_AUTH_SCHEME") or "Basic").strip()
+    scheme = app_config.bifrost_auth_scheme.strip()
     key = (os.getenv("BIFROST_API_KEY") or "").strip()
     if not key:
         raise RuntimeError("BIFROST_API_KEY env var is required")
@@ -104,7 +106,7 @@ def _bifrost_auth_header() -> str:
 
 
 def _bifrost_default_tags() -> list[str]:
-    raw = os.getenv("BIFROST_TAGS") or ""
+    raw = app_config.bifrost_tags
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
@@ -347,7 +349,8 @@ def get_prompts_from_langfuse(
             "LANGFUSE_SECRET_KEY and LANGFUSE_HOST."
         )
 
-    label = os.getenv("LANGFUSE_PROMPT_LABEL", "production")
+    # os.getenv allows runtime override (e.g. eval scripts that swap labels on the fly)
+    label = os.getenv("LANGFUSE_PROMPT_LABEL") or app_config.langfuse_prompt_label
     try:
         prompt_obj = langfuse.get_prompt(prompt_path, label=label)
     except Exception as exc:
@@ -552,7 +555,7 @@ async def call_litellm(
     """
     bifrost_model, extra_body = resolve_model_from_prompt_config(
         prompt_config=config,
-        fallback_model=os.getenv("BIFROST_MODEL"),
+        fallback_model=app_config.bifrost_model or None,
     )
 
     stage_label = (tag_suffix or "").strip() or "unknown"
@@ -841,6 +844,19 @@ def parse_response(response, has_functions: bool = False, has_tools: bool = Fals
                 "[parse_response] recovered JSON after non-ASCII corruption in response"
             )
             return recovered
+
+        # Final fallback: use json-repair to handle structural corruption
+        # (e.g. Gemini hallucinating stray words mid-array/object).
+        try:
+            from json_repair import repair_json  # type: ignore
+            repaired = repair_json(stripped, return_objects=True, skip_json_loads=True)
+            if isinstance(repaired, (dict, list)):
+                logger.warning(
+                    "[parse_response] recovered JSON via json-repair (structurally malformed response)"
+                )
+                return repaired
+        except Exception:
+            pass
 
         if reasoning and not content:
             last_open = stripped.rfind("{")
