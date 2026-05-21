@@ -35,7 +35,8 @@ jobs:
             uvicorn==0.41.0 \
             tldextract==5.3.1 \
             temporalio==1.26.0 \
-            playwright==1.58.0
+            playwright==1.58.0 \
+            "json-repair>=0.30.0"
 
       - name: Install Playwright browsers
         run: playwright install chromium --with-deps

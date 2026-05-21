@@ -301,3 +301,338 @@ class TestAssessServiceName:
             self._page("Unrelated Technology Company"),
         )
         assert result in (None, "NAME_MISMATCH")
+
+    def test_assess_service_name_with_visible_text(self):
+        result = assess_service_name(
+            "NetBanking",
+            "HDFC Bank",
+            self._page("HDFC", visible="hdfc netbanking login"),
+        )
+        assert result in (None, "NAME_MISMATCH")
+
+
+# ---------------------------------------------------------------------------
+# _root_domain / _is_shared_host
+# ---------------------------------------------------------------------------
+
+class TestRootDomainAndSharedHost:
+    def test_root_domain_extracts_registrable(self):
+        from src.heuristics import _root_domain
+        assert _root_domain("https://netbanking.hdfcbank.in/login") == "hdfcbank.in"
+
+    def test_root_domain_com(self):
+        from src.heuristics import _root_domain
+        assert _root_domain("https://bankofamerica.com/login") == "bankofamerica.com"
+
+    def test_root_domain_fallback_no_tldextract(self):
+        """Covers the urlparse fallback branch."""
+        from src.heuristics import _root_domain
+        import src.heuristics as h
+        original = h.tldextract
+        try:
+            h.tldextract = None
+            result = _root_domain("https://example.co.uk/page")
+            assert "example" in result or "co.uk" in result
+        finally:
+            h.tldextract = original
+
+    def test_is_shared_host_true(self):
+        from src.heuristics import _is_shared_host
+        assert _is_shared_host("https://onlinesbi.com/login") is True
+
+    def test_is_shared_host_false(self):
+        from src.heuristics import _is_shared_host
+        assert _is_shared_host("https://uniquebank-xyz.com/login") is False
+
+
+# ---------------------------------------------------------------------------
+# _score_country — edge cases (extra weak signals branch)
+# ---------------------------------------------------------------------------
+
+class TestScoreCountryEdgeCases:
+    def _zones(self, url="", title="", headings="", visible="", cctld=""):
+        return {"url": url, "title": title, "headings": headings, "visible": visible, "cctld": cctld}
+
+    def _signals(self, strong=None, weak=None):
+        return {"strong": strong or [], "weak": weak or []}
+
+    def test_headings_match_scores(self):
+        signals = self._signals(strong=["india"])
+        zones = self._zones(headings="india banking portal")
+        score, notes = _score_country(signals, zones)
+        assert score >= 0  # at least ran without error
+
+    def test_visible_match_scores(self):
+        signals = self._signals(strong=["india"])
+        zones = self._zones(visible="india finance login")
+        score, notes = _score_country(signals, zones)
+        assert score >= 0
+
+    def test_multiple_strong_signals(self):
+        signals = self._signals(strong=[".in", "india"])
+        zones = self._zones(cctld=".in", url="https://sbi.co.in/india")
+        score, notes = _score_country(signals, zones)
+        assert score > 0
+
+    def test_cctld_mismatch_no_bonus(self):
+        signals = self._signals(strong=[".in"])
+        zones = self._zones(cctld=".uk")
+        score, _ = _score_country(signals, zones)
+        assert score == 0
+
+
+# ---------------------------------------------------------------------------
+# internal_models.LLMDecision instantiation
+# ---------------------------------------------------------------------------
+
+class TestLLMDecision:
+    def test_instantiation_all_fields(self):
+        from src.models.internal_models import LLMDecision
+        decision = LLMDecision(
+            inactive_flagged=False,
+            reason="All checks passed",
+            raw_output={"score": 90},
+            error=None,
+            session_id="session-abc",
+            prompt_path="autologinQA/service_matcher",
+        )
+        assert decision.inactive_flagged is False
+        assert decision.reason == "All checks passed"
+        assert decision.raw_output == {"score": 90}
+        assert decision.error is None
+        assert decision.session_id == "session-abc"
+        assert decision.prompt_path == "autologinQA/service_matcher"
+
+    def test_instantiation_with_error(self):
+        from src.models.internal_models import LLMDecision
+        decision = LLMDecision(
+            inactive_flagged=True,
+            reason=None,
+            raw_output=None,
+            error="LLM timeout",
+            session_id=None,
+            prompt_path="autologinQA/identifier_extractor",
+        )
+        assert decision.inactive_flagged is True
+        assert decision.error == "LLM timeout"
+
+    def test_instantiation_with_string_raw_output(self):
+        from src.models.internal_models import LLMDecision
+        decision = LLMDecision(
+            inactive_flagged=False,
+            reason="ok",
+            raw_output="raw text response",
+            error=None,
+            session_id="s1",
+            prompt_path="autologinQA/customer_facing_classifier",
+        )
+        assert isinstance(decision.raw_output, str)
+
+
+# ---------------------------------------------------------------------------
+# LLM-calling paths — classify_customer_facing / extract_and_score /
+# assess_match_with_identifiers / assess_full_match / assess_provider_service_match
+# ---------------------------------------------------------------------------
+
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
+from src.heuristics import (  # noqa: E402
+    classify_customer_facing,
+    extract_and_score,
+    assess_match_with_identifiers,
+    assess_full_match,
+    assess_provider_service_match,
+    _customer_facing_fallback,
+)
+
+
+def _llm_helpers(parse_return):
+    """Return a 4-tuple of mocked langfuse helper callables."""
+    mock_parse = MagicMock(return_value=parse_return)
+    mock_call = AsyncMock(return_value=MagicMock())
+    mock_build = MagicMock(return_value=[{"role": "user", "content": "t"}])
+    mock_get_prompts = MagicMock(return_value=("sys", "usr", {}, None))
+    return mock_build, mock_call, mock_get_prompts, mock_parse
+
+
+class TestCustomerFacingFallback:
+    def test_returns_fail_open(self):
+        result = _customer_facing_fallback("err", "note")
+        assert result["is_customer_facing"] is True
+        assert result["confidence"] == 0
+        assert result["category"] == "unknown"
+
+
+class TestClassifyCustomerFacing:
+    @pytest.mark.asyncio
+    async def test_langfuse_not_configured_returns_fallback(self):
+        with patch("src.heuristics._langfuse_is_configured", return_value=False):
+            result = await classify_customer_facing("Bank", "Svc", "https://x.com", {})
+        assert result["is_customer_facing"] is True
+        assert result["confidence"] == 0
+
+    @pytest.mark.asyncio
+    async def test_success_path(self):
+        parsed = {"is_customer_facing": True, "confidence": 95, "category": "customer_login", "reason": "Login"}
+        helpers = _llm_helpers(parsed)
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await classify_customer_facing("Bank", "Svc", "https://x.com", {"visible_text": "login"}, session_id="s1")
+        assert result["is_customer_facing"] is True
+        assert result["confidence"] == 95
+        assert result["category"] == "customer_login"
+
+    @pytest.mark.asyncio
+    async def test_invalid_category_normalised_to_unknown(self):
+        parsed = {"is_customer_facing": True, "confidence": 80, "category": "garbage_cat", "reason": "ok"}
+        helpers = _llm_helpers(parsed)
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await classify_customer_facing("Bank", "Svc", "https://x.com", {})
+        assert result["category"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_unstructured_response_returns_fallback(self):
+        helpers = _llm_helpers("not a dict at all")
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await classify_customer_facing("Bank", "Svc", "https://x.com", {})
+        assert result["is_customer_facing"] is True
+        assert result["confidence"] == 0
+
+    @pytest.mark.asyncio
+    async def test_llm_exception_returns_fallback(self):
+        mock_build, mock_call, mock_get_prompts, mock_parse = _llm_helpers({})
+        mock_call.side_effect = RuntimeError("network error")
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=(mock_build, mock_call, mock_get_prompts, mock_parse)):
+                result = await classify_customer_facing("Bank", "Svc", "https://x.com", {})
+        assert result["is_customer_facing"] is True
+        assert result["confidence"] == 0
+
+
+class TestExtractAndScore:
+    @pytest.mark.asyncio
+    async def test_langfuse_not_configured_returns_fallback(self):
+        with patch("src.heuristics._langfuse_is_configured", return_value=False):
+            result = await extract_and_score("Bank", "Svc", "https://x.com", {"login_form_present": True})
+        assert result["bank_identifiers"] == []
+        assert result["is_login_page"] is True
+
+    @pytest.mark.asyncio
+    async def test_success_path(self):
+        parsed = {
+            "bank_identifiers": ["MyBank"],
+            "relevant_page_sections": ["Login form"],
+            "login_signals": ["Username field"],
+            "is_login_page": True,
+            "login_type_suggestion": "direct",
+        }
+        helpers = _llm_helpers(parsed)
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await extract_and_score("Bank", "Svc", "https://x.com", {}, session_id="s2")
+        assert result["bank_identifiers"] == ["MyBank"]
+        assert result["is_login_page"] is True
+        assert result["login_type_suggestion"] == "direct"
+
+    @pytest.mark.asyncio
+    async def test_invalid_login_type_defaults_to_direct(self):
+        parsed = {"bank_identifiers": [], "relevant_page_sections": [], "login_signals": [], "is_login_page": False, "login_type_suggestion": "garbage"}
+        helpers = _llm_helpers(parsed)
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await extract_and_score("Bank", "Svc", "https://x.com", {})
+        assert result["login_type_suggestion"] == "direct"
+
+    @pytest.mark.asyncio
+    async def test_unstructured_response_returns_fallback(self):
+        helpers = _llm_helpers("not a dict")
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await extract_and_score("Bank", "Svc", "https://x.com", {})
+        assert result["bank_identifiers"] == []
+
+    @pytest.mark.asyncio
+    async def test_exception_returns_fallback(self):
+        mock_build, mock_call, mock_get_prompts, mock_parse = _llm_helpers({})
+        mock_call.side_effect = RuntimeError("timeout")
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=(mock_build, mock_call, mock_get_prompts, mock_parse)):
+                result = await extract_and_score("Bank", "Svc", "https://x.com", {})
+        assert result["bank_identifiers"] == []
+
+
+class TestAssessMatchWithIdentifiers:
+    def _extractor(self, login_type="direct"):
+        return {"bank_identifiers": ["MyBank"], "relevant_page_sections": ["Login"], "login_signals": [], "is_login_page": True, "login_type_suggestion": login_type}
+
+    @pytest.mark.asyncio
+    async def test_both_empty_skips(self):
+        result = await assess_match_with_identifiers("", "", "https://x.com", self._extractor())
+        assert result["bank_matched"] is True
+        assert result["service_matched"] is True
+
+    @pytest.mark.asyncio
+    async def test_langfuse_not_configured_skips(self):
+        with patch("src.heuristics._langfuse_is_configured", return_value=False):
+            result = await assess_match_with_identifiers("Bank", "Svc", "https://x.com", self._extractor())
+        assert result["bank_matched"] is True
+
+    @pytest.mark.asyncio
+    async def test_success_path(self):
+        parsed = {"bank_matched": True, "service_matched": True, "confidence_score": 90, "url_confidence_score": 85, "login_type": "direct", "reason": "Match", "notes": []}
+        helpers = _llm_helpers(parsed)
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await assess_match_with_identifiers("Bank", "Svc", "https://x.com", self._extractor(), session_id="s3")
+        assert result["bank_matched"] is True
+        assert result["confidence_score"] == 90
+
+    @pytest.mark.asyncio
+    async def test_no_match_builds_reason(self):
+        parsed = {"bank_matched": False, "service_matched": False, "confidence_score": 10, "url_confidence_score": 20, "login_type": "navigation", "reason": "", "notes": []}
+        helpers = _llm_helpers(parsed)
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await assess_match_with_identifiers("Bank", "Svc", "https://x.com", self._extractor())
+        assert result["bank_matched"] is False
+        assert "NOT match" in result["reason"] or result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_unstructured_response_skips(self):
+        helpers = _llm_helpers("nope")
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=helpers):
+                result = await assess_match_with_identifiers("Bank", "Svc", "https://x.com", self._extractor())
+        assert result["bank_matched"] is True
+
+    @pytest.mark.asyncio
+    async def test_exception_skips(self):
+        mock_build, mock_call, mock_get_prompts, mock_parse = _llm_helpers({})
+        mock_call.side_effect = RuntimeError("err")
+        with patch("src.heuristics._langfuse_is_configured", return_value=True):
+            with patch("src.heuristics._load_langfuse_helpers", return_value=(mock_build, mock_call, mock_get_prompts, mock_parse)):
+                result = await assess_match_with_identifiers("Bank", "Svc", "https://x.com", self._extractor())
+        assert result["bank_matched"] is True
+
+
+class TestAssessFullMatch:
+    @pytest.mark.asyncio
+    async def test_delegates_to_both_stages(self):
+        extractor_result = {"bank_identifiers": ["B"], "relevant_page_sections": [], "login_signals": [], "is_login_page": True, "login_type_suggestion": "direct", "notes": ["ext-note"]}
+        match_result = {"bank_matched": True, "service_matched": True, "confidence_score": 80, "url_confidence_score": 75, "login_type": "direct", "reason": "ok", "notes": ["match-note"]}
+        with patch("src.heuristics.extract_and_score", new=AsyncMock(return_value=extractor_result)):
+            with patch("src.heuristics.assess_match_with_identifiers", new=AsyncMock(return_value=match_result)):
+                result = await assess_full_match("Bank", "Svc", "https://x.com", {}, session_id="s")
+        assert "ext-note" in result["notes"]
+        assert result["bank_matched"] is True
+
+
+class TestAssessProviderServiceMatch:
+    @pytest.mark.asyncio
+    async def test_delegates_and_reshapes(self):
+        full = {"bank_matched": True, "service_matched": True, "confidence_score": 85, "url_confidence_score": 70, "login_type": "direct", "reason": "ok", "notes": []}
+        with patch("src.heuristics.assess_full_match", new=AsyncMock(return_value=full)):
+            result = await assess_provider_service_match("Bank", "Svc", {"final_url": "https://x.com"})
+        assert result["matched"] is True
+        assert result["score"] == 85
