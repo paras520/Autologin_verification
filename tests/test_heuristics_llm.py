@@ -369,17 +369,15 @@ class TestAssessFullMatch:
 # ---------------------------------------------------------------------------
 
 class TestLegacyStubs:
-    @pytest.mark.asyncio
-    async def test_assess_direct_login_page_with_form(self):
+    def test_assess_direct_login_page_with_form(self):
         from src.heuristics import assess_direct_login_page
-        result = await assess_direct_login_page("HDFC", "Net", _page(login_form=True))
+        result = assess_direct_login_page("HDFC", "Net", _page(login_form=True))
         assert result["is_login_page"] is True
         assert result["score"] > 50
 
-    @pytest.mark.asyncio
-    async def test_assess_direct_login_page_no_form(self):
+    def test_assess_direct_login_page_no_form(self):
         from src.heuristics import assess_direct_login_page
-        result = await assess_direct_login_page("HDFC", "Net", _page(login_form=False))
+        result = assess_direct_login_page("HDFC", "Net", _page(login_form=False))
         assert result["is_login_page"] is False
         assert result["score"] < 50
 

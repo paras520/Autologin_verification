@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import sys
@@ -52,10 +53,8 @@ async def lifespan(app: FastAPI):
 
     if _worker_task and not _worker_task.done():
         _worker_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await _worker_task
-        except asyncio.CancelledError:
-            pass
 
 
 app = FastAPI(title="URL Verification API", lifespan=lifespan)

@@ -635,7 +635,7 @@ async def assess_full_match(
 # Legacy stubs — kept so existing call-sites don't hard-crash during migration
 # ---------------------------------------------------------------------------
 
-async def assess_direct_login_page(
+def assess_direct_login_page(
     provider: str,
     service_name: str,
     page_result: dict,

@@ -72,7 +72,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         raw_reason = health_result.get("reason") or "URL is unreachable or returned an error"
         reason = raw_reason
         notes = []
-        if token_detected:
+        if isinstance(token_detected, dict):
             notes.append(f"token_in_url: {token_detected['summary']}")
             reason = (
                 f"URL contains an embedded token that may expire — "
@@ -239,7 +239,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     # Phase 4 — Final decision assembly
     # -------------------------------------------------------------------------
     notes = []
-    if token_detected:
+    if isinstance(token_detected, dict):
         notes.append(f"token_in_url: {token_detected['summary']}")
     if soft_errors:
         notes.append(f"soft_errors={', '.join(soft_errors)}")
@@ -268,7 +268,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     )
 
     # token > bank mismatch > service mismatch > country mismatch > uncertain audience > match reason > health reason
-    if token_detected:
+    if isinstance(token_detected, dict):
         final_reason = (
             f"URL contains an embedded token that may expire — "
             f"{token_detected['summary']}"
