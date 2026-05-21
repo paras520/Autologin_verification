@@ -55,7 +55,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     soft_errors = health_result.get("soft_errors") or []
     page_result = health_result.get("page_result") or {}
     health_check = health_result.get("health") in {"OK", "REDIRECT"}
-    token_detected: dict | None = None  # disabled — token detection re-enabled later
+    token_detected: dict = {}  # empty = no token; re-enable by assigning detect_url_token result
     # Use the final resolved URL for all LLM calls so domain/path matching is
     # accurate even when the original URL redirects (http→https, subdomain hops, etc.)
     effective_url = page_result.get("final_url") or url
@@ -72,7 +72,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
         raw_reason = health_result.get("reason") or "URL is unreachable or returned an error"
         reason = raw_reason
         notes = []
-        if isinstance(token_detected, dict):
+        if token_detected:
             notes.append(f"token_in_url: {token_detected['summary']}")
             reason = (
                 f"URL contains an embedded token that may expire — "
@@ -239,7 +239,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     # Phase 4 — Final decision assembly
     # -------------------------------------------------------------------------
     notes = []
-    if isinstance(token_detected, dict):
+    if token_detected:
         notes.append(f"token_in_url: {token_detected['summary']}")
     if soft_errors:
         notes.append(f"soft_errors={', '.join(soft_errors)}")
@@ -268,7 +268,7 @@ async def verify_url(payload: CheckRequest) -> ReturnResponse:
     )
 
     # token > bank mismatch > service mismatch > country mismatch > uncertain audience > match reason > health reason
-    if isinstance(token_detected, dict):
+    if token_detected:
         final_reason = (
             f"URL contains an embedded token that may expire — "
             f"{token_detected['summary']}"

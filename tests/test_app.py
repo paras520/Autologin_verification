@@ -1,4 +1,5 @@
-from unittest.mock import AsyncMock, patch
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -61,3 +62,39 @@ def test_check_endpoint_maps_service_value_error_to_http_400():
     assert response.json() == {
         "detail": "URL must include a valid scheme and host."
     }
+
+
+class TestLifespan:
+    def test_lifespan_temporal_disabled(self):
+        """Lifespan runs startup and shutdown with TEMPORAL_STATE=OFF."""
+        with patch("temporal.config.settings.TEMPORAL_ENABLED", False):
+            with TestClient(app) as c:
+                resp = c.post("/check", json={})
+                assert resp.status_code in (200, 400, 422)
+
+    def test_lifespan_temporal_enabled_worker_starts_and_cancels(self):
+        """Lifespan starts and cancels the Temporal worker task."""
+        import asyncio
+
+        async def _fake_worker():
+            await asyncio.sleep(9999)
+
+        with (
+            patch("temporal.config.settings.TEMPORAL_ENABLED", True),
+            patch("temporal.workers.worker.start_worker", return_value=_fake_worker()),
+        ):
+            with TestClient(app) as c:
+                resp = c.post("/check", json={})
+                assert resp.status_code in (200, 400, 422)
+
+
+class TestTemporalEnabledFlag:
+    def test_temporal_enabled_returns_bool(self):
+        from src.controllers.verification_controller import _temporal_enabled
+        with patch("temporal.config.settings.TEMPORAL_ENABLED", False):
+            assert _temporal_enabled() is False
+
+    def test_temporal_enabled_true(self):
+        from src.controllers.verification_controller import _temporal_enabled
+        with patch("temporal.config.settings.TEMPORAL_ENABLED", True):
+            assert _temporal_enabled() is True
