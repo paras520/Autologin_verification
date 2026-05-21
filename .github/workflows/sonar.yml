@@ -1,0 +1,57 @@
+name: SonarQube Analysis
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  sonar:
+    name: Build & Analyze
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          pip install \
+            fastapi==0.135.1 \
+            pydantic==2.12.5 \
+            httpx==0.28.1 \
+            pytest==9.0.2 \
+            pytest-cov==7.1.0 \
+            pytest-asyncio==0.24.0 \
+            anyio==4.12.1 \
+            asyncpg==0.31.0 \
+            python-dotenv==1.2.2 \
+            starlette==0.52.1 \
+            uvicorn==0.41.0 \
+            tldextract==5.3.1 \
+            temporalio==1.26.0 \
+            playwright==1.58.0
+
+      - name: Install Playwright browsers
+        run: playwright install chromium --with-deps
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ \
+            --cov=src --cov=app \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing \
+            -v
+        env:
+          TEMPORAL_STATE: "OFF"
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonar.diro.live

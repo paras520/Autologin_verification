@@ -46,7 +46,7 @@ def _slug(text: str) -> str:
     return text.strip("-")[:60]
 
 
-_REPEATED_GARBAGE = re.compile(r"([^\s]{2,})\1{5,}")  # any token repeated 5+ times
+_REPEATED_GARBAGE = re.compile(r"([^\s]{2,30})\1{5,}")  # token repeated 5+ times (30-char cap prevents ReDoS)
 
 
 def _clean_text(text: str | None) -> str | None:
