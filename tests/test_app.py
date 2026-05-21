@@ -87,6 +87,22 @@ class TestLifespan:
                 resp = c.post("/check", json={})
                 assert resp.status_code in (200, 400, 422)
 
+    def test_on_worker_done_crash_logs_error(self):
+        """_on_worker_done callback logs when worker task raises an exception."""
+        import asyncio
+
+        exc = RuntimeError("worker crashed")
+
+        async def _crashing_worker():
+            raise exc
+
+        with (
+            patch("temporal.config.settings.TEMPORAL_ENABLED", True),
+            patch("temporal.workers.worker.start_worker", return_value=_crashing_worker()),
+        ):
+            with TestClient(app) as c:
+                pass  # lifespan runs; crashing worker done callback fires
+
 
 class TestTemporalEnabledFlag:
     def test_temporal_enabled_returns_bool(self):

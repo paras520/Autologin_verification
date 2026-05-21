@@ -185,6 +185,61 @@ class TestHandleBatchAsync:
         assert result.total_links == 3
 
 
+class TestEnqueueTemporal:
+    @pytest.mark.asyncio
+    async def test_enqueue_temporal_signals_each_cb_link(self):
+        from temporal.workflows.queue_workflow import QueueItem, VerificationQueueWorkflow
+
+        controller = VerificationController()
+        payload = BatchCheckRequest(cb_link_ids=["B-IN-001", "B-IN-002"])
+
+        mock_handle = AsyncMock()
+        mock_handle.signal = AsyncMock()
+        mock_client = AsyncMock()
+        mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+        with (
+            patch("temporal.client.client.get_temporal_client", new=AsyncMock(return_value=mock_client)),
+            patch("temporal.config.settings.QUEUE_WORKFLOW_ID", "queue-wf-id"),
+        ):
+            await controller._enqueue_temporal(payload, "run-001")
+
+        assert mock_handle.signal.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_enqueue_temporal_handles_signal_error(self):
+        controller = VerificationController()
+        payload = BatchCheckRequest(cb_link_ids=["B-IN-001"])
+
+        mock_handle = AsyncMock()
+        mock_handle.signal = AsyncMock(side_effect=RuntimeError("signal failed"))
+        mock_client = AsyncMock()
+        mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+        with (
+            patch("temporal.client.client.get_temporal_client", new=AsyncMock(return_value=mock_client)),
+            patch("temporal.config.settings.QUEUE_WORKFLOW_ID", "queue-wf-id"),
+        ):
+            # Should not raise — errors are caught and logged
+            await controller._enqueue_temporal(payload, "run-001")
+
+    @pytest.mark.asyncio
+    async def test_async_batch_routes_to_temporal_when_enabled(self):
+        controller = VerificationController()
+        payload = BatchCheckRequest(cb_link_ids=["B-IN-001"])
+        enqueue_mock = AsyncMock()
+
+        with (
+            patch("src.controllers.verification_controller._temporal_enabled", return_value=True),
+            patch("src.controllers.verification_controller.create_activity_run", new=AsyncMock(return_value="run-999")),
+            patch.object(controller, "_enqueue_temporal", enqueue_mock),
+        ):
+            result = await controller.handle_batch_async(payload, MagicMock())
+
+        assert result.run_id == "run-999"
+        enqueue_mock.assert_awaited_once()
+
+
 class TestRunVerificationBackground:
     def _mock_rows(self):
         return [
