@@ -44,7 +44,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           pytest tests/ \
-            --cov=src --cov=app \
+            --cov \
             --cov-report=xml:coverage.xml \
             --cov-report=term-missing \
             -v
