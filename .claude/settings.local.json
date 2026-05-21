@@ -31,7 +31,9 @@
       "Bash(python3 -c ' *)",
       "Bash(curl -s -u \"squ_ea69719eea6444b6eb28620b7db7540ebfbfd224:\" \"https://sonar.diro.live/api/issues/search?componentKeys=m103-autologin-python-stage1&resolved=false&ps=100&types=SECURITY_HOTSPOT\")",
       "Bash(curl -s -u \"squ_ea69719eea6444b6eb28620b7db7540ebfbfd224:\" \"https://sonar.diro.live/api/issues/search?componentKeys=m103-autologin-python-stage1&resolved=false&ps=100&impactSoftwareQualities=RELIABILITY&impactSeverities=HIGH,BLOCKER\")",
-      "Bash(curl -s -u \"squ_ea69719eea6444b6eb28620b7db7540ebfbfd224:\" \"https://sonar.diro.live/api/issues/search?componentKeys=m103-autologin-python-stage1&resolved=false&ps=100&impactSoftwareQualities=SECURITY&impactSeverities=HIGH,BLOCKER\")"
+      "Bash(curl -s -u \"squ_ea69719eea6444b6eb28620b7db7540ebfbfd224:\" \"https://sonar.diro.live/api/issues/search?componentKeys=m103-autologin-python-stage1&resolved=false&ps=100&impactSoftwareQualities=SECURITY&impactSeverities=HIGH,BLOCKER\")",
+      "Bash(where sonar-scanner *)",
+      "Bash(where sonar-scanner.bat)"
     ],
     "defaultMode": "acceptEdits",
     "allowedTools": [
