@@ -59,11 +59,13 @@ class VerificationController:
             ) from exc
 
     async def handle_batch(self, payload: BatchCheckRequest) -> BatchCheckResponse:
-        """Batch check — routes to Temporal when TEMPORAL_STATE=ON, inline otherwise."""
+        """Batch check — routes to Temporal when TEMPORAL_STATE=ON, inline otherwise.
+        Results are pushed to m103 after completion so the QA Review dashboard reflects them."""
         try:
             if _temporal_enabled():
-                return await self._handle_batch_temporal(payload)
-            return await self._handle_batch_inline(payload)
+                results = await self._handle_batch_temporal(payload)
+            else:
+                results = await self._handle_batch_inline(payload)
         except HTTPException:
             raise
         except Exception as exc:
@@ -72,6 +74,10 @@ class VerificationController:
                 status_code=500,
                 detail="Internal server error while processing /check/batch request.",
             ) from exc
+
+        run_id = str(uuid.uuid4())
+        await ingest_to_m103(run_id, results, payload.triggered_by)
+        return results
 
     # ------------------------------------------------------------------
     # Temporal path

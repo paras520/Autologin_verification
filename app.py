@@ -67,7 +67,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(verification_router)
+app.include_router(verification_router, prefix="/autourl-qa")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ def _valid_payload() -> dict:
 
 
 def test_check_endpoint_requires_request_fields():
-    response = client.post("/check", json={})
+    response = client.post("/autourl-qa/check", json={})
 
     assert response.status_code == 422
 
@@ -45,7 +45,7 @@ def test_check_endpoint_returns_service_response():
         "src.controllers.verification_controller.verify_url",
         new=AsyncMock(return_value=mocked_response),
     ):
-        response = client.post("/check", json=_valid_payload())
+        response = client.post("/autourl-qa/check", json=_valid_payload())
 
     assert response.status_code == 200
     assert response.json() == mocked_response.model_dump()
@@ -56,7 +56,7 @@ def test_check_endpoint_maps_service_value_error_to_http_400():
         "src.controllers.verification_controller.verify_url",
         new=AsyncMock(side_effect=ValueError("URL must include a valid scheme and host.")),
     ):
-        response = client.post("/check", json=_valid_payload())
+        response = client.post("/autourl-qa/check", json=_valid_payload())
 
     assert response.status_code == 400
     assert response.json() == {
@@ -69,7 +69,7 @@ class TestLifespan:
         """Lifespan runs startup and shutdown with TEMPORAL_STATE=OFF."""
         with patch("temporal.config.settings.TEMPORAL_ENABLED", False):
             with TestClient(app) as c:
-                resp = c.post("/check", json={})
+                resp = c.post("/autourl-qa/check", json={})
                 assert resp.status_code in (200, 400, 422)
 
     def test_lifespan_temporal_enabled_worker_starts_and_cancels(self):
@@ -84,7 +84,7 @@ class TestLifespan:
             patch("temporal.workers.worker.start_worker", return_value=_fake_worker()),
         ):
             with TestClient(app) as c:
-                resp = c.post("/check", json={})
+                resp = c.post("/autourl-qa/check", json={})
                 assert resp.status_code in (200, 400, 422)
 
     def test_on_worker_done_crash_logs_error(self):

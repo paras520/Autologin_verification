@@ -2,5 +2,5 @@ projectKey=m103-autologin-python-stage1
 serverUrl=https://sonar.diro.live
 serverVersion=26.4.0.121862
 dashboardUrl=https://sonar.diro.live/dashboard?id=m103-autologin-python-stage1
-ceTaskId=c2332a76-2ce2-478c-b64d-bfc6f7a53703
-ceTaskUrl=https://sonar.diro.live/api/ce/task?id=c2332a76-2ce2-478c-b64d-bfc6f7a53703
+ceTaskId=89f86a99-89d7-48a2-bdd5-853944abc83f
+ceTaskUrl=https://sonar.diro.live/api/ce/task?id=89f86a99-89d7-48a2-bdd5-853944abc83f
