@@ -1,0 +1,29 @@
+[run]
+source = .
+relative_files = True
+omit =
+    tests/*
+    venv/*
+    */site-packages/*
+    langfuse_helper.py
+    get_prompts.py
+    getprompts.py
+    temporal/*
+    output/*
+    src/page_extraction.py
+    src/services/duplicate_service.py
+    src/utils/page_extraction.py
+
+[report]
+omit =
+    tests/*
+    venv/*
+    */site-packages/*
+    langfuse_helper.py
+    get_prompts.py
+    getprompts.py
+    temporal/*
+    output/*
+    src/page_extraction.py
+    src/services/duplicate_service.py
+    src/utils/page_extraction.py
